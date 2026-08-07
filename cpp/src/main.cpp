@@ -6,6 +6,8 @@
 #include "DroneConfig.h"
 #include "CoveragePlanner.h"
 
+using namespace std;
+
 int main() {
 
     Field field{100.0, 60.0};
@@ -18,13 +20,13 @@ int main() {
 
     CoveragePlanner planner;
 
-    std::vector<Point> path =
+    vector<Point> path =
         planner.generatePath(field, drone);
 
-    std::ofstream waypointFile("waypoints.csv");
+    ofstream waypointFile("waypoints.csv");
 
     if (!waypointFile) {
-        std::cerr << "Could not create waypoints.csv\n";
+        cerr << "Could not create waypoints.csv\n";
         return 1;
     }
 
@@ -34,25 +36,25 @@ int main() {
         drone.footprintWidth *
         (1.0 - drone.overlap);
 
-    std::cout << "Agricultural Drone Survey System\n\n";
+    cout << "Agricultural Drone Survey System\n\n";
 
-    std::cout << "Field Width: "
-              << field.width << " m\n";
+    cout << "Field Width: "
+         << field.width << " m\n";
 
-    std::cout << "Field Height: "
-              << field.height << " m\n";
+    cout << "Field Height: "
+         << field.height << " m\n";
 
-    std::cout << "Lane Spacing: "
-              << laneSpacing << " m\n\n";
+    cout << "Lane Spacing: "
+         << laneSpacing << " m\n\n";
 
-    std::cout << "Generated Route:\n";
+    cout << "Generated Route:\n";
 
-    for (std::size_t i = 0; i < path.size(); ++i) {
+    for (size_t i = 0; i < path.size(); ++i) {
         waypointFile
             << path[i].x << ","
             << path[i].y << "\n";
 
-        std::cout
+        cout
             << "Waypoint " << i + 1
             << ": ("
             << path[i].x
@@ -61,7 +63,7 @@ int main() {
             << ")\n";
     }
 
-    std::cout << "\nSaved waypoints to waypoints.csv\n";
+    cout << "\nSaved waypoints to waypoints.csv\n";
 
     return 0;
 }

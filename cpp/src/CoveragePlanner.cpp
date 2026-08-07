@@ -2,18 +2,20 @@
 
 #include <cmath>
 
-std::vector<Point> CoveragePlanner::generatePath(
+using namespace std;
+
+vector<Point> CoveragePlanner::generatePath(
     const Field& field,
     const DroneConfig& drone
 ) const {
 
-    std::vector<Point> path;
+    vector<Point> path;
 
     double laneSpacing =
         drone.footprintWidth * (1.0 - drone.overlap);
 
     int numberOfPasses =
-        static_cast<int>(std::ceil(field.height / laneSpacing));
+        static_cast<int>(ceil(field.height / laneSpacing));
 
     double actualSpacing =
         field.height / numberOfPasses;
