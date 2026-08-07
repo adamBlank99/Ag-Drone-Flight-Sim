@@ -18,6 +18,7 @@ target_sources(
     drone_survey
     PRIVATE
         cpp/src/CoveragePlanner.cpp
+        cpp/src/Geometry.cpp
         cpp/src/main.cpp
 )
 

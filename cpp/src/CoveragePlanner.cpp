@@ -14,17 +14,23 @@ vector<Point> CoveragePlanner::generatePath(
     double laneSpacing =
         drone.footprintWidth * (1.0 - drone.overlap);
 
-    int numberOfPasses =
-        static_cast<int>(ceil(field.height / laneSpacing));
+    int numberOfPasses = 1;
 
-    double actualSpacing =
-        field.height / numberOfPasses;
+    if (field.height > drone.footprintWidth) {
+        numberOfPasses = 1 + static_cast<int>(ceil(
+            (field.height - drone.footprintWidth) / laneSpacing
+        ));
+    }
+
+    double routeHeight =
+        (numberOfPasses - 1) * laneSpacing;
+
+    double firstLaneY =
+        (field.height - routeHeight) / 2.0;
 
     for (int i = 0; i < numberOfPasses; ++i) {
 
-        double y =
-            actualSpacing / 2.0 +
-            i * actualSpacing;
+        double y = firstLaneY + i * laneSpacing;
 
         if (i % 2 == 0) {
             path.push_back({0.0, y});
