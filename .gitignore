@@ -1,0 +1,13 @@
+# CMake build output
+/build/
+/cmake-build-*/
+
+# Compiled artifacts
+*.dSYM/
+*.o
+*.out
+
+# Editor and operating-system files
+.DS_Store
+.vscode/
+.idea/
