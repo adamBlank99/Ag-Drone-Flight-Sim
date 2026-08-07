@@ -29,15 +29,11 @@ Install the Python dependency:
 python3 -m pip install -r python/requirements.txt
 ```
 
-Open the default 100 m by 60 m field visualization:
+Generate the route with C++, then display it over the field:
 
 ```sh
+./build/drone_survey
 python3 python/visualize_field.py
 ```
 
-Use custom dimensions or save the plot to a file:
-
-```sh
-python3 python/visualize_field.py --width 150 --height 80
-python3 python/visualize_field.py --save field.png
-```
+The C++ program writes `waypoints.csv`, which the Python visualizer reads.

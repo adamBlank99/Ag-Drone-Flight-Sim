@@ -1,3 +1,4 @@
+#include <fstream>
 #include <iostream>
 #include <vector>
 
@@ -20,6 +21,15 @@ int main() {
     std::vector<Point> path =
         planner.generatePath(field, drone);
 
+    std::ofstream waypointFile("waypoints.csv");
+
+    if (!waypointFile) {
+        std::cerr << "Could not create waypoints.csv\n";
+        return 1;
+    }
+
+    waypointFile << "x,y\n";
+
     double laneSpacing =
         drone.footprintWidth *
         (1.0 - drone.overlap);
@@ -38,6 +48,10 @@ int main() {
     std::cout << "Generated Route:\n";
 
     for (std::size_t i = 0; i < path.size(); ++i) {
+        waypointFile
+            << path[i].x << ","
+            << path[i].y << "\n";
+
         std::cout
             << "Waypoint " << i + 1
             << ": ("
@@ -46,6 +60,8 @@ int main() {
             << path[i].y
             << ")\n";
     }
+
+    std::cout << "\nSaved waypoints to waypoints.csv\n";
 
     return 0;
 }
