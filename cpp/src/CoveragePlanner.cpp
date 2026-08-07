@@ -98,19 +98,6 @@ vector<Point> findHorizontalIntersections(
         }
     );
 
-    intersections.erase(
-        unique(
-            intersections.begin(),
-            intersections.end(),
-            [](const Point& first, const Point& second) {
-                return
-                    abs(first.x - second.x) <= EPSILON &&
-                    abs(first.y - second.y) <= EPSILON;
-            }
-        ),
-        intersections.end()
-    );
-
     if (intersections.size() % 2 != 0) {
         throw runtime_error("Polygon produced an odd number of line intersections");
     }
@@ -185,7 +172,12 @@ vector<LineSegment> CoveragePlanner::generateCoverageSegments(
             findHorizontalIntersections(field, bounds, y);
 
         for (size_t i = 0; i < intersections.size(); i += 2) {
-            segments.push_back({intersections[i], intersections[i + 1]});
+            const Point& start = intersections[i];
+            const Point& end = intersections[i + 1];
+
+            if (abs(end.x - start.x) > EPSILON) {
+                segments.push_back({start, end});
+            }
         }
     }
 

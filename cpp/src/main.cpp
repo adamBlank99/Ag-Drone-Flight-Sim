@@ -1,4 +1,3 @@
-#include <cmath>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -8,21 +7,9 @@
 #include "CoveragePlanner.h"
 #include "Geometry.h"
 #include "Polygon.h"
+#include "RouteStatistics.h"
 
 using namespace std;
-
-double calculateTotalDistance(const vector<Point>& path) {
-    double totalDistance = 0.0;
-
-    for (size_t i = 1; i < path.size(); ++i) {
-        double changeInX = path[i].x - path[i - 1].x;
-        double changeInY = path[i].y - path[i - 1].y;
-
-        totalDistance += hypot(changeInX, changeInY);
-    }
-
-    return totalDistance;
-}
 
 const char* pointLocationName(PointLocation location) {
     switch (location) {
@@ -73,11 +60,8 @@ int main() {
         drone.footprintWidth *
         (1.0 - drone.overlap);
 
-    size_t coveragePasses = path.size() / 2;
-    size_t transitionSegments =
-        coveragePasses > 0 ? coveragePasses - 1 : 0;
-    double totalDistance = calculateTotalDistance(path);
-    double estimatedFlightTime = totalDistance / drone.speed;
+    RouteStatistics routeStatistics =
+        calculateRouteStatistics(path, drone.speed);
     double irregularFieldArea = calculatePolygonArea(irregularField);
     BoundingBox boundingBox = calculateBoundingBox(irregularField);
 
@@ -152,13 +136,14 @@ int main() {
     cout << "Lane spacing: " << laneSpacing << " m\n\n";
 
     cout << "Route:\n";
-    cout << "Coverage passes: " << coveragePasses << "\n";
-    cout << "Transition segments: " << transitionSegments << "\n";
-    cout << "Waypoints: " << path.size() << "\n";
-    cout << "Total distance: " << totalDistance << " m\n";
+    cout << "Coverage passes: " << routeStatistics.coveragePasses << "\n";
+    cout << "Transition segments: "
+         << routeStatistics.transitionSegments << "\n";
+    cout << "Waypoints: " << routeStatistics.waypointCount << "\n";
+    cout << "Total distance: " << routeStatistics.totalDistance << " m\n";
     cout << fixed << setprecision(1);
     cout << "Estimated flight time: "
-         << estimatedFlightTime << " seconds\n";
+         << routeStatistics.estimatedFlightTime << " seconds\n";
 
     return 0;
 }

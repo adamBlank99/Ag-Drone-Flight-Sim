@@ -12,30 +12,38 @@ if(PROJECT_SOURCE_DIR STREQUAL PROJECT_BINARY_DIR)
     message(FATAL_ERROR "In-source builds are not supported. Use: cmake -S . -B build")
 endif()
 
-add_executable(drone_survey)
+function(enable_project_warnings target)
+    if(MSVC)
+        target_compile_options(${target} PRIVATE /W4)
+    else()
+        target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+endfunction()
+
+add_library(drone_core)
 
 target_sources(
-    drone_survey
+    drone_core
     PRIVATE
         cpp/src/CoveragePlanner.cpp
         cpp/src/Geometry.cpp
-        cpp/src/main.cpp
+        cpp/src/RouteStatistics.cpp
 )
 
 target_include_directories(
-    drone_survey
-    PRIVATE
+    drone_core
+    PUBLIC
         cpp/include
 )
 
-target_compile_features(drone_survey PRIVATE cxx_std_17)
-set_target_properties(drone_survey PROPERTIES CXX_EXTENSIONS OFF)
+target_compile_features(drone_core PUBLIC cxx_std_17)
+set_target_properties(drone_core PROPERTIES CXX_EXTENSIONS OFF)
+enable_project_warnings(drone_core)
 
-if(MSVC)
-    target_compile_options(drone_survey PRIVATE /W4)
-else()
-    target_compile_options(drone_survey PRIVATE -Wall -Wextra -Wpedantic)
-endif()
+add_executable(drone_survey cpp/src/main.cpp)
+target_link_libraries(drone_survey PRIVATE drone_core)
+set_target_properties(drone_survey PROPERTIES CXX_EXTENSIONS OFF)
+enable_project_warnings(drone_survey)
 
 include(CTest)
 

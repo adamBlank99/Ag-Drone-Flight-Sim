@@ -1,98 +1,31 @@
-add_test(
-    NAME drone_survey.starts
-    COMMAND drone_survey
+add_executable(drone_tests PlannerTests.cpp)
+target_link_libraries(drone_tests PRIVATE drone_core)
+set_target_properties(drone_tests PROPERTIES CXX_EXTENSIONS OFF)
+enable_project_warnings(drone_tests)
+
+set(PHASE_2_TEST_CASES
+    polygon_area
+    bounding_box
+    point_in_polygon
+    line_intersections
+    clipped_segments
+    concave_field
+    small_field
+    vertex_edge_touch
+    waypoint_containment
+    route_statistics
 )
 
+foreach(test_case IN LISTS PHASE_2_TEST_CASES)
+    add_test(
+        NAME phase2.${test_case}
+        COMMAND drone_tests ${test_case}
+    )
+endforeach()
+
+add_test(NAME drone_survey.smoke COMMAND drone_survey)
 set_tests_properties(
-    drone_survey.starts
+    drone_survey.smoke
     PROPERTIES
         PASS_REGULAR_EXPRESSION "AGRICULTURAL DRONE SURVEY SYSTEM"
-)
-
-add_test(
-    NAME drone_survey.irregular_route
-    COMMAND drone_survey
-)
-
-set_tests_properties(
-    drone_survey.irregular_route
-    PROPERTIES
-        PASS_REGULAR_EXPRESSION "Coverage passes: 6"
-)
-
-add_test(
-    NAME drone_survey.irregular_waypoints
-    COMMAND drone_survey
-)
-
-set_tests_properties(
-    drone_survey.irregular_waypoints
-    PROPERTIES
-        PASS_REGULAR_EXPRESSION "Waypoints: 12"
-)
-
-add_test(
-    NAME drone_survey.route_transitions
-    COMMAND drone_survey
-)
-
-set_tests_properties(
-    drone_survey.route_transitions
-    PROPERTIES
-        PASS_REGULAR_EXPRESSION "Transition segments: 5"
-)
-
-add_test(
-    NAME drone_survey.polygon_area
-    COMMAND drone_survey
-)
-
-set_tests_properties(
-    drone_survey.polygon_area
-    PROPERTIES
-        PASS_REGULAR_EXPRESSION "Area: 7550 square meters"
-)
-
-add_test(
-    NAME drone_survey.bounding_box
-    COMMAND drone_survey
-)
-
-set_tests_properties(
-    drone_survey.bounding_box
-    PROPERTIES
-        PASS_REGULAR_EXPRESSION "maxX: 120 m"
-)
-
-add_test(
-    NAME drone_survey.point_in_polygon
-    COMMAND drone_survey
-)
-
-set_tests_properties(
-    drone_survey.point_in_polygon
-    PROPERTIES
-        PASS_REGULAR_EXPRESSION "Boundary point .*: boundary"
-)
-
-add_test(
-    NAME drone_survey.segment_crossing
-    COMMAND drone_survey
-)
-
-set_tests_properties(
-    drone_survey.segment_crossing
-    PROPERTIES
-        PASS_REGULAR_EXPRESSION "Crossing segments: intersection at .*50, 30"
-)
-
-add_test(
-    NAME drone_survey.segment_separate
-    COMMAND drone_survey
-)
-
-set_tests_properties(
-    drone_survey.segment_separate
-    PROPERTIES
-        PASS_REGULAR_EXPRESSION "Separate segments: no intersection"
 )
