@@ -1,6 +1,7 @@
 # CMake build output
 /build/
 /cmake-build-*/
+/compile_commands.json
 
 # Compiled artifacts
 *.dSYM/
@@ -11,3 +12,8 @@
 .DS_Store
 .vscode/
 .idea/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/

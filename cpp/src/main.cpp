@@ -1,34 +1,51 @@
 #include <iostream>
+#include <vector>
 
-#include "Point.h"
 #include "Field.h"
 #include "DroneConfig.h"
+#include "CoveragePlanner.h"
 
 int main() {
+
     Field field{100.0, 60.0};
 
     DroneConfig drone{
-        20.0,   // camera footprint width
-        0.30,   // 30% overlap
-        6.0     // meters per second
+        20.0,
+        0.30,
+        6.0
     };
 
+    CoveragePlanner planner;
+
+    std::vector<Point> path =
+        planner.generatePath(field, drone);
+
     double laneSpacing =
-        drone.footprintWidth * (1.0 - drone.overlap);
+        drone.footprintWidth *
+        (1.0 - drone.overlap);
 
     std::cout << "Agricultural Drone Survey System\n\n";
 
-    std::cout << "Field Width: " << field.width << " m\n";
-    std::cout << "Field Height: " << field.height << " m\n";
+    std::cout << "Field Width: "
+              << field.width << " m\n";
 
-    std::cout << "Camera Footprint: "
-              << drone.footprintWidth << " m\n";
-
-    std::cout << "Overlap: "
-              << drone.overlap * 100 << "%\n";
+    std::cout << "Field Height: "
+              << field.height << " m\n";
 
     std::cout << "Lane Spacing: "
-              << laneSpacing << " m\n";
+              << laneSpacing << " m\n\n";
+
+    std::cout << "Generated Route:\n";
+
+    for (std::size_t i = 0; i < path.size(); ++i) {
+        std::cout
+            << "Waypoint " << i + 1
+            << ": ("
+            << path[i].x
+            << ", "
+            << path[i].y
+            << ")\n";
+    }
 
     return 0;
 }

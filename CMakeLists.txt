@@ -6,6 +6,8 @@ project(
     LANGUAGES CXX
 )
 
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 if(PROJECT_SOURCE_DIR STREQUAL PROJECT_BINARY_DIR)
     message(FATAL_ERROR "In-source builds are not supported. Use: cmake -S . -B build")
 endif()
@@ -15,6 +17,7 @@ add_executable(drone_survey)
 target_sources(
     drone_survey
     PRIVATE
+        cpp/src/CoveragePlanner.cpp
         cpp/src/main.cpp
 )
 
