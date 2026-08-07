@@ -4,7 +4,6 @@
 #include <iostream>
 #include <vector>
 
-#include "Field.h"
 #include "DroneConfig.h"
 #include "CoveragePlanner.h"
 #include "Geometry.h"
@@ -39,9 +38,6 @@ const char* pointLocationName(PointLocation location) {
 }
 
 int main() {
-
-    Field field{100.0, 60.0};
-
     DroneConfig drone{
         20.0,
         0.30,
@@ -60,22 +56,26 @@ int main() {
     CoveragePlanner planner;
 
     vector<Point> path =
-        planner.generatePath(field, drone);
+        planner.generatePath(irregularField, drone);
 
     ofstream waypointFile("waypoints.csv");
+    ofstream polygonFile("field_polygon.csv");
 
-    if (!waypointFile) {
-        cerr << "Could not create waypoints.csv\n";
+    if (!waypointFile || !polygonFile) {
+        cerr << "Could not create visualization data files\n";
         return 1;
     }
 
     waypointFile << "x,y\n";
+    polygonFile << "x,y\n";
 
     double laneSpacing =
         drone.footprintWidth *
         (1.0 - drone.overlap);
 
     size_t coveragePasses = path.size() / 2;
+    size_t transitionSegments =
+        coveragePasses > 0 ? coveragePasses - 1 : 0;
     double totalDistance = calculateTotalDistance(path);
     double estimatedFlightTime = totalDistance / drone.speed;
     double irregularFieldArea = calculatePolygonArea(irregularField);
@@ -105,13 +105,16 @@ int main() {
             << waypoint.y << "\n";
     }
 
+    for (const Point& vertex : irregularField.vertices) {
+        polygonFile
+            << vertex.x << ","
+            << vertex.y << "\n";
+    }
+
     cout << "AGRICULTURAL DRONE SURVEY SYSTEM\n\n";
 
     cout << "Field:\n";
-    cout << "Width: " << field.width << " m\n";
-    cout << "Height: " << field.height << " m\n\n";
-
-    cout << "Sample irregular field:\n";
+    cout << "Type: irregular polygon\n";
     cout << "Vertices: " << irregularField.vertices.size() << "\n";
     cout << "Area: " << irregularFieldArea << " square meters\n";
     cout << "Bounding box:\n";
@@ -150,6 +153,7 @@ int main() {
 
     cout << "Route:\n";
     cout << "Coverage passes: " << coveragePasses << "\n";
+    cout << "Transition segments: " << transitionSegments << "\n";
     cout << "Waypoints: " << path.size() << "\n";
     cout << "Total distance: " << totalDistance << " m\n";
     cout << fixed << setprecision(1);

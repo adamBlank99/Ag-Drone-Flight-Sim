@@ -10,14 +10,36 @@ set_tests_properties(
 )
 
 add_test(
-    NAME drone_survey.default_route
+    NAME drone_survey.irregular_route
     COMMAND drone_survey
 )
 
 set_tests_properties(
-    drone_survey.default_route
+    drone_survey.irregular_route
     PROPERTIES
-        PASS_REGULAR_EXPRESSION "Coverage passes: 4"
+        PASS_REGULAR_EXPRESSION "Coverage passes: 6"
+)
+
+add_test(
+    NAME drone_survey.irregular_waypoints
+    COMMAND drone_survey
+)
+
+set_tests_properties(
+    drone_survey.irregular_waypoints
+    PROPERTIES
+        PASS_REGULAR_EXPRESSION "Waypoints: 12"
+)
+
+add_test(
+    NAME drone_survey.route_transitions
+    COMMAND drone_survey
+)
+
+set_tests_properties(
+    drone_survey.route_transitions
+    PROPERTIES
+        PASS_REGULAR_EXPRESSION "Transition segments: 5"
 )
 
 add_test(

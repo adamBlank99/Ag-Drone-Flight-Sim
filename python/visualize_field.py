@@ -3,42 +3,52 @@
 from pathlib import Path
 
 import matplotlib.pyplot as plt
-from matplotlib.patches import Rectangle
+from matplotlib.patches import Polygon
 
 
-# These values match the field in the C++ program.
-FIELD_WIDTH = 100.0
-FIELD_HEIGHT = 60.0
-WAYPOINT_FILE = Path(__file__).resolve().parent.parent / "waypoints.csv"
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+WAYPOINT_FILE = PROJECT_ROOT / "waypoints.csv"
+POLYGON_FILE = PROJECT_ROOT / "field_polygon.csv"
 
 
-if not WAYPOINT_FILE.exists():
-    raise SystemExit("Run ./build/drone_survey first to generate waypoints.csv")
+def read_points(file_path):
+    if not file_path.exists():
+        raise SystemExit(f"Run ./build/drone_survey first to generate {file_path.name}")
 
-waypoints = []
+    points = []
 
-with WAYPOINT_FILE.open() as file:
-    next(file)  # Skip the x,y header.
+    with file_path.open() as file:
+        next(file)  # Skip the x,y header.
 
-    for line in file:
-        x, y = line.strip().split(",")
-        waypoints.append((float(x), float(y)))
+        for line in file:
+            x, y = line.strip().split(",")
+            points.append((float(x), float(y)))
+
+    return points
+
+
+waypoints = read_points(WAYPOINT_FILE)
+polygon_vertices = read_points(POLYGON_FILE)
 
 
 figure, axes = plt.subplots()
 
-field = Rectangle(
-    (0, 0),
-    FIELD_WIDTH,
-    FIELD_HEIGHT,
+field = Polygon(
+    polygon_vertices,
+    closed=True,
     facecolor="lightgreen",
     edgecolor="darkgreen",
     linewidth=2,
 )
 
 axes.add_patch(field)
-axes.set_xlim(-5, FIELD_WIDTH + 5)
-axes.set_ylim(-5, FIELD_HEIGHT + 5)
+
+polygon_x = [point[0] for point in polygon_vertices]
+polygon_y = [point[1] for point in polygon_vertices]
+margin = max(max(polygon_x) - min(polygon_x), max(polygon_y) - min(polygon_y)) * 0.05
+
+axes.set_xlim(min(polygon_x) - margin, max(polygon_x) + margin)
+axes.set_ylim(min(polygon_y) - margin, max(polygon_y) + margin)
 axes.set_aspect("equal")
 axes.set_xlabel("Width (m)")
 axes.set_ylabel("Height (m)")

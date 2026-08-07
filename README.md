@@ -36,4 +36,5 @@ Generate the route with C++, then display it over the field:
 python3 python/visualize_field.py
 ```
 
-The C++ program writes `waypoints.csv`, which the Python visualizer reads.
+The C++ program writes `waypoints.csv` and `field_polygon.csv`, which the
+Python visualizer reads.

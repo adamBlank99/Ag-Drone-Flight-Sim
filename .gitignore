@@ -3,6 +3,7 @@
 /cmake-build-*/
 /compile_commands.json
 /waypoints.csv
+/field_polygon.csv
 
 # Compiled artifacts
 *.dSYM/
