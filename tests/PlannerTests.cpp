@@ -10,6 +10,7 @@
 #include "DroneConfig.h"
 #include "Geometry.h"
 #include "Polygon.h"
+#include "RouteOptimizer.h"
 #include "RouteStatistics.h"
 
 using namespace std;
@@ -215,6 +216,108 @@ void testOverlapBehavior() {
         0.5773502692,
         "Photo capture interval"
     );
+}
+
+void testRotationGeometry() {
+    Point center{1.0, 1.0};
+    Point rotatedPoint = rotatePoint({2.0, 1.0}, center, 90.0);
+    requireSamePoint(rotatedPoint, {1.0, 2.0}, "90-degree point rotation");
+
+    Polygon triangle{{
+        {1.0, 1.0},
+        {3.0, 1.0},
+        {1.0, 3.0}
+    }};
+    Polygon rotatedTriangle = rotatePolygon(triangle, center, 90.0);
+
+    requireSamePoint(
+        rotatedTriangle.vertices[1],
+        {1.0, 3.0},
+        "Polygon vertex rotation"
+    );
+    requireNear(
+        calculatePolygonArea(rotatedTriangle),
+        calculatePolygonArea(triangle),
+        "Rotation must preserve polygon area"
+    );
+
+    Polygon restored = rotatePolygon(rotatedTriangle, center, -90.0);
+
+    for (size_t i = 0; i < triangle.vertices.size(); ++i) {
+        requireSamePoint(
+            restored.vertices[i],
+            triangle.vertices[i],
+            "Forward and reverse polygon rotation"
+        );
+    }
+}
+
+void testCandidateRoutes() {
+    vector<double> angles = generateCandidateAngles();
+    require(angles.size() == 7, "Candidate angle count");
+
+    for (size_t i = 0; i < angles.size(); ++i) {
+        requireNear(
+            angles[i],
+            static_cast<double>(i * 15),
+            "Candidate angle sequence"
+        );
+    }
+
+    Polygon field = sampleField();
+    DroneConfig drone{{10.0, 90.0, 60.0, 0.30, 0.70}, 6.0};
+    RouteOptimizationResult result = optimizeRoute(field, drone, angles, 10.0);
+
+    require(result.candidates.size() == angles.size(), "Candidate route count");
+
+    for (const RouteCandidate& candidate : result.candidates) {
+        require(!candidate.waypoints.empty(), "Candidate route cannot be empty");
+        require(
+            candidate.statistics.coveragePasses == candidate.waypoints.size() / 2,
+            "Candidate pass count"
+        );
+        requireNear(
+            candidate.score,
+            candidate.statistics.totalDistance +
+                10.0 * candidate.statistics.transitionSegments,
+            "Candidate route score"
+        );
+        requireWaypointsInside(candidate.waypoints, field);
+    }
+
+    for (const RouteCandidate& candidate : result.candidates) {
+        require(
+            result.bestRoute.score <= candidate.score + TOLERANCE,
+            "Selected route must have the lowest score"
+        );
+    }
+}
+
+void testBestAngle() {
+    Point center{0.0, 0.0};
+    Polygon horizontalRectangle{{
+        {-50.0, -10.0},
+        {50.0, -10.0},
+        {50.0, 10.0},
+        {-50.0, 10.0}
+    }};
+    Polygon rotatedRectangle =
+        rotatePolygon(horizontalRectangle, center, 30.0);
+    DroneConfig drone{{10.0, 90.0, 60.0, 0.30, 0.70}, 6.0};
+
+    RouteOptimizationResult result = optimizeRoute(
+        rotatedRectangle,
+        drone,
+        generateCandidateAngles(),
+        10.0
+    );
+
+    requireNear(result.bestRoute.angleDegrees, 30.0, "Rotated field best angle");
+    require(
+        result.bestRoute.angleDegrees != 0.0,
+        "Rotated field best angle must not be zero"
+    );
+    requireWaypointsInside(result.bestRoute.waypoints, rotatedRectangle);
 }
 
 void testPolygonArea() {
@@ -534,6 +637,9 @@ struct TestCase {
 const vector<TestCase> TEST_CASES{
     {"camera_footprint", testCameraFootprint},
     {"overlap_behavior", testOverlapBehavior},
+    {"rotation_geometry", testRotationGeometry},
+    {"candidate_routes", testCandidateRoutes},
+    {"best_angle", testBestAngle},
     {"polygon_area", testPolygonArea},
     {"bounding_box", testBoundingBox},
     {"point_in_polygon", testPointInPolygon},

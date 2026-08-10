@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import csv
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -29,6 +30,27 @@ def read_points(file_path):
     return points
 
 
+def read_optimized_route(file_path):
+    if not file_path.exists():
+        raise SystemExit(f"Run ./build/drone_survey first to generate {file_path.name}")
+
+    with file_path.open(newline="") as file:
+        rows = list(csv.DictReader(file))
+
+    if not rows:
+        raise SystemExit(f"No optimized route found in {file_path.name}")
+
+    metadata = {
+        "angle": float(rows[0]["angle_degrees"]),
+        "score": float(rows[0]["score"]),
+        "distance": float(rows[0]["total_distance"]),
+        "turns": int(rows[0]["turns"]),
+    }
+    points = [(float(row["x"]), float(row["y"])) for row in rows]
+
+    return metadata, points
+
+
 parser = argparse.ArgumentParser(description="Visualize the generated drone route.")
 parser.add_argument(
     "--show-footprint",
@@ -37,7 +59,7 @@ parser.add_argument(
 )
 arguments = parser.parse_args()
 
-waypoints = read_points(WAYPOINT_FILE)
+route_metadata, waypoints = read_optimized_route(WAYPOINT_FILE)
 polygon_vertices = read_points(POLYGON_FILE)
 
 
@@ -62,7 +84,10 @@ axes.set_ylim(min(polygon_y) - margin, max(polygon_y) + margin)
 axes.set_aspect("equal")
 axes.set_xlabel("Width (m)")
 axes.set_ylabel("Height (m)")
-axes.set_title("Agricultural Drone Coverage Route")
+axes.set_title(
+    f"Agricultural Drone Coverage Route — "
+    f"Selected angle: {route_metadata['angle']:g}°"
+)
 axes.grid(True)
 
 x_values = [point[0] for point in waypoints]
@@ -74,7 +99,7 @@ axes.plot(
     color="blue",
     marker="o",
     linewidth=2,
-    label="Drone route",
+    label=f"Optimized route ({route_metadata['angle']:g}°)",
 )
 
 if arguments.show_footprint:

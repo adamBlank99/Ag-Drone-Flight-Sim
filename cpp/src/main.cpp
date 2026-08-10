@@ -5,9 +5,9 @@
 
 #include "CameraConfig.h"
 #include "DroneConfig.h"
-#include "CoveragePlanner.h"
 #include "Geometry.h"
 #include "Polygon.h"
+#include "RouteOptimizer.h"
 #include "RouteStatistics.h"
 
 using namespace std;
@@ -46,10 +46,15 @@ int main() {
         {0.0, 50.0}
     }};
 
-    CoveragePlanner planner;
-
-    vector<Point> path =
-        planner.generatePath(irregularField, drone);
+    vector<double> candidateAngles = generateCandidateAngles();
+    RouteOptimizationResult optimization = optimizeRoute(
+        irregularField,
+        drone,
+        candidateAngles,
+        10.0
+    );
+    const RouteCandidate& bestRoute = optimization.bestRoute;
+    const vector<Point>& path = bestRoute.waypoints;
 
     ofstream waypointFile("waypoints.csv");
     ofstream polygonFile("field_polygon.csv");
@@ -60,7 +65,8 @@ int main() {
         return 1;
     }
 
-    waypointFile << "x,y\n";
+    waypointFile
+        << "angle_degrees,score,total_distance,turns,x,y\n";
     polygonFile << "x,y\n";
     footprintFile << "width,height\n";
 
@@ -79,8 +85,7 @@ int main() {
                   << footprint.width << ","
                   << footprint.height << "\n";
 
-    RouteStatistics routeStatistics =
-        calculateRouteStatistics(path, drone.speed);
+    const RouteStatistics& routeStatistics = bestRoute.statistics;
     double irregularFieldArea = calculatePolygonArea(irregularField);
     BoundingBox boundingBox = calculateBoundingBox(irregularField);
 
@@ -103,9 +108,13 @@ int main() {
     );
 
     for (const Point& waypoint : path) {
-        waypointFile
-            << waypoint.x << ","
-            << waypoint.y << "\n";
+        waypointFile << setprecision(15)
+                     << bestRoute.angleDegrees << ","
+                     << bestRoute.score << ","
+                     << routeStatistics.totalDistance << ","
+                     << routeStatistics.transitionSegments << ","
+                     << waypoint.x << ","
+                     << waypoint.y << "\n";
     }
 
     for (const Point& vertex : irregularField.vertices) {
@@ -149,6 +158,22 @@ int main() {
          << (separateIntersection ? "intersection" : "no intersection")
          << "\n\n";
 
+    cout << "Route optimization:\n";
+    cout << "Score = distance + " << optimization.turnPenalty
+         << " m per turn\n";
+
+    for (const RouteCandidate& candidate : optimization.candidates) {
+        cout << candidate.angleDegrees << " degrees -> "
+             << candidate.statistics.totalDistance << " m, "
+             << candidate.statistics.coveragePasses << " passes, "
+             << candidate.statistics.transitionSegments << " turns, "
+             << candidate.statistics.estimatedFlightTime << " seconds, "
+             << "score " << candidate.score << "\n";
+    }
+
+    cout << "Selected best angle: "
+         << bestRoute.angleDegrees << " degrees\n\n";
+
     cout << "Camera:\n";
     cout << "Altitude: " << drone.camera.altitude << " m\n";
     cout << "Horizontal FOV: "
@@ -167,6 +192,8 @@ int main() {
          << photoCaptureInterval << " seconds\n\n";
 
     cout << "Route:\n";
+    cout << "Selected angle: " << bestRoute.angleDegrees << " degrees\n";
+    cout << "Optimization score: " << bestRoute.score << "\n";
     cout << "Coverage passes: " << routeStatistics.coveragePasses << "\n";
     cout << "Transition segments: "
          << routeStatistics.transitionSegments << "\n";

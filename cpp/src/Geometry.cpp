@@ -9,6 +9,7 @@ using namespace std;
 namespace {
 
 constexpr double EPSILON = 1e-9;
+constexpr double PI = 3.14159265358979323846;
 
 bool pointOnSegment(
     const Point& point,
@@ -83,6 +84,40 @@ BoundingBox calculateBoundingBox(const Polygon& polygon) {
     }
 
     return boundingBox;
+}
+
+Point rotatePoint(
+    const Point& point,
+    const Point& center,
+    double angleDegrees
+) {
+    double angleRadians = angleDegrees * PI / 180.0;
+    double cosine = cos(angleRadians);
+    double sine = sin(angleRadians);
+    double translatedX = point.x - center.x;
+    double translatedY = point.y - center.y;
+
+    return {
+        center.x + translatedX * cosine - translatedY * sine,
+        center.y + translatedX * sine + translatedY * cosine
+    };
+}
+
+Polygon rotatePolygon(
+    const Polygon& polygon,
+    const Point& center,
+    double angleDegrees
+) {
+    Polygon rotated;
+    rotated.vertices.reserve(polygon.vertices.size());
+
+    for (const Point& vertex : polygon.vertices) {
+        rotated.vertices.push_back(
+            rotatePoint(vertex, center, angleDegrees)
+        );
+    }
+
+    return rotated;
 }
 
 PointLocation pointInPolygon(const Point& point, const Polygon& polygon) {

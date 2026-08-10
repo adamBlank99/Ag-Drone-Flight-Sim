@@ -24,6 +24,16 @@ struct LineSegment {
 
 double calculatePolygonArea(const Polygon& polygon);
 BoundingBox calculateBoundingBox(const Polygon& polygon);
+Point rotatePoint(
+    const Point& point,
+    const Point& center,
+    double angleDegrees
+);
+Polygon rotatePolygon(
+    const Polygon& polygon,
+    const Point& center,
+    double angleDegrees
+);
 PointLocation pointInPolygon(const Point& point, const Polygon& polygon);
 std::optional<Point> calculateLineSegmentIntersection(
     const LineSegment& first,

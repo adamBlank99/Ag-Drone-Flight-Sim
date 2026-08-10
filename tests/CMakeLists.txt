@@ -6,6 +6,9 @@ enable_project_warnings(drone_tests)
 set(DRONE_TEST_CASES
     camera_footprint
     overlap_behavior
+    rotation_geometry
+    candidate_routes
+    best_angle
     polygon_area
     bounding_box
     point_in_polygon

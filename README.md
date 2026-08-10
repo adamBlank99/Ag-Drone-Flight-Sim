@@ -50,3 +50,13 @@ The camera model uses separate overlap values:
 
 - Side overlap controls spacing between adjacent flight lanes.
 - Forward overlap controls spacing and capture time between photos along a lane.
+
+The planner compares flight angles from 0 to 90 degrees in 15-degree steps.
+It selects the lowest score using:
+
+```text
+score = total distance + 10 meters per turn
+```
+
+`waypoints.csv` stores the selected angle, score, distance, turn count, and
+optimized waypoints for the Python visualization.
