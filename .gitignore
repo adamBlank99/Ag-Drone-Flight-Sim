@@ -4,6 +4,7 @@
 /compile_commands.json
 /waypoints.csv
 /field_polygon.csv
+/camera_footprint.csv
 
 # Compiled artifacts
 *.dSYM/

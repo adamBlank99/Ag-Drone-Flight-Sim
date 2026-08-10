@@ -25,6 +25,7 @@ add_library(drone_core)
 target_sources(
     drone_core
     PRIVATE
+        cpp/src/CameraConfig.cpp
         cpp/src/CoveragePlanner.cpp
         cpp/src/Geometry.cpp
         cpp/src/RouteStatistics.cpp

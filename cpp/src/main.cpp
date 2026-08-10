@@ -3,6 +3,7 @@
 #include <iostream>
 #include <vector>
 
+#include "CameraConfig.h"
 #include "DroneConfig.h"
 #include "CoveragePlanner.h"
 #include "Geometry.h"
@@ -26,8 +27,13 @@ const char* pointLocationName(PointLocation location) {
 
 int main() {
     DroneConfig drone{
-        20.0,
-        0.30,
+        {
+            10.0,
+            90.0,
+            60.0,
+            0.30,
+            0.70
+        },
         6.0
     };
 
@@ -47,18 +53,31 @@ int main() {
 
     ofstream waypointFile("waypoints.csv");
     ofstream polygonFile("field_polygon.csv");
+    ofstream footprintFile("camera_footprint.csv");
 
-    if (!waypointFile || !polygonFile) {
+    if (!waypointFile || !polygonFile || !footprintFile) {
         cerr << "Could not create visualization data files\n";
         return 1;
     }
 
     waypointFile << "x,y\n";
     polygonFile << "x,y\n";
+    footprintFile << "width,height\n";
 
-    double laneSpacing =
-        drone.footprintWidth *
-        (1.0 - drone.overlap);
+    CameraFootprint footprint = calculateFootprint(drone.camera);
+    double laneSpacing = calculateLaneSpacing(
+        footprint,
+        drone.camera.sideOverlap
+    );
+    double photoSpacing = calculatePhotoSpacing(
+        footprint,
+        drone.camera.forwardOverlap
+    );
+    double photoCaptureInterval = photoSpacing / drone.speed;
+
+    footprintFile << setprecision(15)
+                  << footprint.width << ","
+                  << footprint.height << "\n";
 
     RouteStatistics routeStatistics =
         calculateRouteStatistics(path, drone.speed);
@@ -131,9 +150,21 @@ int main() {
          << "\n\n";
 
     cout << "Camera:\n";
-    cout << "Footprint: " << drone.footprintWidth << " m\n";
-    cout << "Overlap: " << drone.overlap * 100.0 << "%\n";
-    cout << "Lane spacing: " << laneSpacing << " m\n\n";
+    cout << "Altitude: " << drone.camera.altitude << " m\n";
+    cout << "Horizontal FOV: "
+         << drone.camera.horizontalFovDegrees << " degrees\n";
+    cout << "Vertical FOV: "
+         << drone.camera.verticalFovDegrees << " degrees\n";
+    cout << "Footprint width: " << footprint.width << " m\n";
+    cout << "Footprint height: " << footprint.height << " m\n";
+    cout << "Side overlap: "
+         << drone.camera.sideOverlap * 100.0 << "%\n";
+    cout << "Forward overlap: "
+         << drone.camera.forwardOverlap * 100.0 << "%\n";
+    cout << "Lane spacing: " << laneSpacing << " m\n";
+    cout << "Photo spacing: " << photoSpacing << " m\n";
+    cout << "Photo capture interval: "
+         << photoCaptureInterval << " seconds\n\n";
 
     cout << "Route:\n";
     cout << "Coverage passes: " << routeStatistics.coveragePasses << "\n";

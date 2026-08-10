@@ -3,7 +3,9 @@ target_link_libraries(drone_tests PRIVATE drone_core)
 set_target_properties(drone_tests PROPERTIES CXX_EXTENSIONS OFF)
 enable_project_warnings(drone_tests)
 
-set(PHASE_2_TEST_CASES
+set(DRONE_TEST_CASES
+    camera_footprint
+    overlap_behavior
     polygon_area
     bounding_box
     point_in_polygon
@@ -16,9 +18,9 @@ set(PHASE_2_TEST_CASES
     route_statistics
 )
 
-foreach(test_case IN LISTS PHASE_2_TEST_CASES)
+foreach(test_case IN LISTS DRONE_TEST_CASES)
     add_test(
-        NAME phase2.${test_case}
+        NAME drone.${test_case}
         COMMAND drone_tests ${test_case}
     )
 endforeach()

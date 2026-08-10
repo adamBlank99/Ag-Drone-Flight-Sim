@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 
+import argparse
 from pathlib import Path
 
 import matplotlib.pyplot as plt
-from matplotlib.patches import Polygon
+from matplotlib.patches import Polygon, Rectangle
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 WAYPOINT_FILE = PROJECT_ROOT / "waypoints.csv"
 POLYGON_FILE = PROJECT_ROOT / "field_polygon.csv"
+FOOTPRINT_FILE = PROJECT_ROOT / "camera_footprint.csv"
 
 
 def read_points(file_path):
@@ -26,6 +28,14 @@ def read_points(file_path):
 
     return points
 
+
+parser = argparse.ArgumentParser(description="Visualize the generated drone route.")
+parser.add_argument(
+    "--show-footprint",
+    action="store_true",
+    help="show the camera footprint centered on the first waypoint",
+)
+arguments = parser.parse_args()
 
 waypoints = read_points(WAYPOINT_FILE)
 polygon_vertices = read_points(POLYGON_FILE)
@@ -66,6 +76,33 @@ axes.plot(
     linewidth=2,
     label="Drone route",
 )
+
+if arguments.show_footprint:
+    footprint_width, footprint_height = read_points(FOOTPRINT_FILE)[0]
+    first_x, first_y = waypoints[0]
+
+    camera_footprint = Rectangle(
+        (
+            first_x - footprint_width / 2.0,
+            first_y - footprint_height / 2.0,
+        ),
+        footprint_width,
+        footprint_height,
+        facecolor="orange",
+        edgecolor="darkorange",
+        alpha=0.35,
+        linewidth=2,
+        label="Camera footprint at waypoint 1",
+    )
+    axes.add_patch(camera_footprint)
+    axes.set_xlim(
+        min(polygon_x + [first_x - footprint_width / 2.0]) - margin,
+        max(polygon_x + [first_x + footprint_width / 2.0]) + margin,
+    )
+    axes.set_ylim(
+        min(polygon_y + [first_y - footprint_height / 2.0]) - margin,
+        max(polygon_y + [first_y + footprint_height / 2.0]) + margin,
+    )
 
 for number, (x, y) in enumerate(waypoints, start=1):
     axes.annotate(str(number), (x, y), xytext=(5, 5), textcoords="offset points")

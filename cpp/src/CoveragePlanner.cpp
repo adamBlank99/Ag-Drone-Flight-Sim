@@ -17,28 +17,26 @@ vector<double> generateLaneLevels(
     double maxY,
     const DroneConfig& drone
 ) {
-    if (drone.footprintWidth <= 0.0) {
-        throw invalid_argument("Camera footprint width must be positive");
-    }
-
-    if (drone.overlap < 0.0 || drone.overlap >= 1.0) {
-        throw invalid_argument("Camera overlap must be between 0 and 1");
-    }
-
     double fieldHeight = maxY - minY;
 
     if (fieldHeight <= 0.0) {
         throw invalid_argument("Field height must be positive");
     }
 
-    double laneSpacing =
-        drone.footprintWidth * (1.0 - drone.overlap);
+    CameraFootprint footprint = calculateFootprint(drone.camera);
+    double laneSpacing = calculateLaneSpacing(
+        footprint,
+        drone.camera.sideOverlap
+    );
 
     int numberOfLevels = 1;
 
-    if (fieldHeight > drone.footprintWidth) {
+    if (fieldHeight > footprint.width) {
+        double additionalLevels =
+            (fieldHeight - footprint.width) / laneSpacing;
+
         numberOfLevels = 1 + static_cast<int>(ceil(
-            (fieldHeight - drone.footprintWidth) / laneSpacing
+            additionalLevels - EPSILON
         ));
     }
 

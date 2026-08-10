@@ -1,7 +1,8 @@
 #pragma once
 
+#include "CameraConfig.h"
+
 struct DroneConfig {
-    double footprintWidth;
-    double overlap;
+    CameraConfig camera;
     double speed;
 };

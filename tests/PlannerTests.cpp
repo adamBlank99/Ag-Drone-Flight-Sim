@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 
+#include "CameraConfig.h"
 #include "CoveragePlanner.h"
 #include "DroneConfig.h"
 #include "Geometry.h"
@@ -80,6 +81,140 @@ void requireWaypointsInside(
             "Generated waypoint lies outside the polygon"
         );
     }
+}
+
+void testCameraFootprint() {
+    CameraFootprint lowAltitude =
+        calculateFootprint({10.0, 90.0, 60.0, 0.30, 0.70});
+    requireNear(lowAltitude.width, 20.0, "10 m / 90 degree footprint width");
+    requireNear(
+        lowAltitude.height,
+        11.5470053838,
+        "10 m / 60 degree footprint height"
+    );
+    requireNear(
+        calculateLaneSpacing(lowAltitude, 0.30),
+        14.0,
+        "Calculated lane spacing"
+    );
+    requireNear(
+        calculatePhotoSpacing(lowAltitude, 0.70),
+        3.4641016151,
+        "Calculated photo spacing"
+    );
+
+    CameraFootprint surveyAltitude =
+        calculateFootprint({50.0, 60.0, 45.0, 0.40, 0.75});
+    requireNear(
+        surveyAltitude.width,
+        57.735026919,
+        "50 m / 60 degree footprint width"
+    );
+    requireNear(
+        surveyAltitude.height,
+        41.421356237,
+        "50 m / 45 degree footprint height"
+    );
+
+    CameraFootprint square =
+        calculateFootprint({20.0, 90.0, 90.0, 0.20, 0.60});
+    requireNear(square.width, 40.0, "Square footprint width");
+    requireNear(square.height, 40.0, "Square footprint height");
+
+    bool rejectedAltitude = false;
+    bool rejectedHorizontalFov = false;
+    bool rejectedVerticalFov = false;
+    bool rejectedForwardOverlap = false;
+
+    try {
+        calculateFootprint({0.0, 90.0, 60.0, 0.30, 0.70});
+    }
+    catch (const invalid_argument&) {
+        rejectedAltitude = true;
+    }
+
+    try {
+        calculateFootprint({10.0, 0.0, 60.0, 0.30, 0.70});
+    }
+    catch (const invalid_argument&) {
+        rejectedHorizontalFov = true;
+    }
+
+    try {
+        calculateFootprint({10.0, 90.0, 180.0, 0.30, 0.70});
+    }
+    catch (const invalid_argument&) {
+        rejectedVerticalFov = true;
+    }
+
+    try {
+        calculatePhotoSpacing(lowAltitude, 1.0);
+    }
+    catch (const invalid_argument&) {
+        rejectedForwardOverlap = true;
+    }
+
+    require(rejectedAltitude, "Zero altitude must be rejected");
+    require(rejectedHorizontalFov, "Zero horizontal FOV must be rejected");
+    require(rejectedVerticalFov, "180 degree vertical FOV must be rejected");
+    require(rejectedForwardOverlap, "Full forward overlap must be rejected");
+}
+
+void testOverlapBehavior() {
+    CoveragePlanner planner;
+    Polygon field = sampleField();
+
+    DroneConfig lowForwardOverlap{
+        {10.0, 90.0, 60.0, 0.30, 0.10},
+        6.0
+    };
+    DroneConfig highForwardOverlap{
+        {10.0, 90.0, 60.0, 0.30, 0.90},
+        6.0
+    };
+    DroneConfig highSideOverlap{
+        {10.0, 90.0, 60.0, 0.50, 0.70},
+        6.0
+    };
+
+    vector<Point> lowForwardPath =
+        planner.generatePath(field, lowForwardOverlap);
+    vector<Point> highForwardPath =
+        planner.generatePath(field, highForwardOverlap);
+    vector<Point> highSidePath =
+        planner.generatePath(field, highSideOverlap);
+
+    require(
+        lowForwardPath.size() == highForwardPath.size(),
+        "Forward overlap must not change route waypoint count"
+    );
+
+    for (size_t i = 0; i < lowForwardPath.size(); ++i) {
+        requireSamePoint(
+            lowForwardPath[i],
+            highForwardPath[i],
+            "Forward overlap must not change route geometry"
+        );
+    }
+
+    require(
+        highSidePath.size() > lowForwardPath.size(),
+        "Higher side overlap must create more coverage passes"
+    );
+
+    CameraFootprint footprint = calculateFootprint(lowForwardOverlap.camera);
+    double lowForwardSpacing = calculatePhotoSpacing(footprint, 0.10);
+    double highForwardSpacing = calculatePhotoSpacing(footprint, 0.90);
+
+    require(
+        highForwardSpacing < lowForwardSpacing,
+        "Higher forward overlap must shorten photo spacing"
+    );
+    requireNear(
+        calculatePhotoSpacing(footprint, 0.70) / lowForwardOverlap.speed,
+        0.5773502692,
+        "Photo capture interval"
+    );
 }
 
 void testPolygonArea() {
@@ -167,7 +302,7 @@ void testLineIntersections() {
 void testClippedSegments() {
     CoveragePlanner planner;
     Polygon field = sampleField();
-    DroneConfig drone{20.0, 0.30, 6.0};
+    DroneConfig drone{{10.0, 90.0, 60.0, 0.30, 0.70}, 6.0};
 
     vector<LineSegment> segments =
         planner.generateCoverageSegments(field, drone);
@@ -199,7 +334,7 @@ void testClippedSegments() {
 void testConcaveField() {
     CoveragePlanner planner;
     Polygon field = concaveField();
-    DroneConfig drone{2.0, 0.0, 2.0};
+    DroneConfig drone{{1.0, 90.0, 60.0, 0.0, 0.70}, 2.0};
 
     vector<LineSegment> segments =
         planner.generateCoverageSegments(field, drone);
@@ -240,7 +375,7 @@ void testSmallField() {
         {5.0, 4.0},
         {0.0, 4.0}
     }};
-    DroneConfig drone{20.0, 0.30, 2.0};
+    DroneConfig drone{{10.0, 90.0, 60.0, 0.30, 0.70}, 2.0};
 
     vector<Point> path = planner.generatePath(field, drone);
     require(path.size() == 2, "Small field needs one coverage pass");
@@ -254,7 +389,10 @@ void testSmallField() {
     bool rejectedInvalidFootprint = false;
 
     try {
-        planner.generatePath(field, DroneConfig{0.0, 0.30, 2.0});
+        planner.generatePath(
+            field,
+            DroneConfig{{0.0, 90.0, 60.0, 0.30, 0.70}, 2.0}
+        );
     }
     catch (const invalid_argument&) {
         rejectedInvalidFootprint = true;
@@ -265,7 +403,10 @@ void testSmallField() {
     bool rejectedInvalidOverlap = false;
 
     try {
-        planner.generatePath(field, DroneConfig{20.0, 1.0, 2.0});
+        planner.generatePath(
+            field,
+            DroneConfig{{10.0, 90.0, 60.0, 1.0, 0.70}, 2.0}
+        );
     }
     catch (const invalid_argument&) {
         rejectedInvalidOverlap = true;
@@ -276,7 +417,7 @@ void testSmallField() {
 
 void testVertexAndEdgeTouch() {
     CoveragePlanner planner;
-    DroneConfig drone{2.0, 0.0, 1.0};
+    DroneConfig drone{{1.0, 90.0, 60.0, 0.0, 0.70}, 1.0};
 
     Polygon vertexTouchField{{
         {0.0, 0.0},
@@ -323,8 +464,8 @@ void testVertexAndEdgeTouch() {
 
 void testWaypointContainment() {
     CoveragePlanner planner;
-    DroneConfig sampleDrone{20.0, 0.30, 6.0};
-    DroneConfig concaveDrone{2.0, 0.0, 2.0};
+    DroneConfig sampleDrone{{10.0, 90.0, 60.0, 0.30, 0.70}, 6.0};
+    DroneConfig concaveDrone{{1.0, 90.0, 60.0, 0.0, 0.70}, 2.0};
 
     Polygon sample = sampleField();
     Polygon concave = concaveField();
@@ -349,7 +490,7 @@ void testRouteStatistics() {
     requireNear(known.estimatedFlightTime, 6.5, "Known route flight time");
 
     CoveragePlanner planner;
-    DroneConfig drone{20.0, 0.30, 6.0};
+    DroneConfig drone{{10.0, 90.0, 60.0, 0.30, 0.70}, 6.0};
     RouteStatistics generated = calculateRouteStatistics(
         planner.generatePath(sampleField(), drone),
         drone.speed
@@ -391,6 +532,8 @@ struct TestCase {
 };
 
 const vector<TestCase> TEST_CASES{
+    {"camera_footprint", testCameraFootprint},
+    {"overlap_behavior", testOverlapBehavior},
     {"polygon_area", testPolygonArea},
     {"bounding_box", testBoundingBox},
     {"point_in_polygon", testPointInPolygon},

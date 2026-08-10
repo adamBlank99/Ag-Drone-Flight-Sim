@@ -37,4 +37,16 @@ python3 python/visualize_field.py
 ```
 
 The C++ program writes `waypoints.csv` and `field_polygon.csv`, which the
-Python visualizer reads.
+Python visualizer reads. It also writes `camera_footprint.csv` with the
+calculated ground footprint.
+
+To show the camera footprint at the first waypoint:
+
+```sh
+python3 python/visualize_field.py --show-footprint
+```
+
+The camera model uses separate overlap values:
+
+- Side overlap controls spacing between adjacent flight lanes.
+- Forward overlap controls spacing and capture time between photos along a lane.
