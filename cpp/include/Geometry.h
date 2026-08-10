@@ -39,3 +39,11 @@ std::optional<Point> calculateLineSegmentIntersection(
     const LineSegment& first,
     const LineSegment& second
 );
+bool segmentIntersectsPolygonInterior(
+    const LineSegment& segment,
+    const Polygon& polygon
+);
+bool segmentStaysInsidePolygon(
+    const LineSegment& segment,
+    const Polygon& polygon
+);

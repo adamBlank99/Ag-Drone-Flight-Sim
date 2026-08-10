@@ -28,6 +28,9 @@ target_sources(
         cpp/src/CameraConfig.cpp
         cpp/src/CoveragePlanner.cpp
         cpp/src/Geometry.cpp
+        cpp/src/MissionRoute.cpp
+        cpp/src/Obstacle.cpp
+        cpp/src/ObstacleRouter.cpp
         cpp/src/RouteOptimizer.cpp
         cpp/src/RouteStatistics.cpp
 )

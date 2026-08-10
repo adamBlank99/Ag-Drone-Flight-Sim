@@ -233,3 +233,116 @@ optional<Point> calculateLineSegmentIntersection(
         first.start.y + firstAmount * firstDirectionY
     };
 }
+
+namespace {
+
+vector<double> segmentPolygonParameters(
+    const LineSegment& segment,
+    const Polygon& polygon
+) {
+    vector<double> parameters{0.0, 1.0};
+    double changeInX = segment.end.x - segment.start.x;
+    double changeInY = segment.end.y - segment.start.y;
+
+    for (size_t i = 0; i < polygon.vertices.size(); ++i) {
+        const Point& edgeStart = polygon.vertices[i];
+        const Point& edgeEnd =
+            polygon.vertices[(i + 1) % polygon.vertices.size()];
+        auto intersection = calculateLineSegmentIntersection(
+            segment,
+            LineSegment{edgeStart, edgeEnd}
+        );
+
+        if (!intersection) {
+            continue;
+        }
+
+        double parameter = 0.0;
+
+        if (abs(changeInX) >= abs(changeInY) && abs(changeInX) > EPSILON) {
+            parameter = (intersection->x - segment.start.x) / changeInX;
+        }
+        else if (abs(changeInY) > EPSILON) {
+            parameter = (intersection->y - segment.start.y) / changeInY;
+        }
+
+        parameters.push_back(clamp(parameter, 0.0, 1.0));
+    }
+
+    sort(parameters.begin(), parameters.end());
+    parameters.erase(
+        unique(
+            parameters.begin(),
+            parameters.end(),
+            [](double first, double second) {
+                return abs(first - second) <= EPSILON;
+            }
+        ),
+        parameters.end()
+    );
+
+    return parameters;
+}
+
+Point pointAlongSegment(const LineSegment& segment, double parameter) {
+    return {
+        segment.start.x + parameter * (segment.end.x - segment.start.x),
+        segment.start.y + parameter * (segment.end.y - segment.start.y)
+    };
+}
+
+} // namespace
+
+bool segmentIntersectsPolygonInterior(
+    const LineSegment& segment,
+    const Polygon& polygon
+) {
+    if (
+        pointInPolygon(segment.start, polygon) == PointLocation::Inside ||
+        pointInPolygon(segment.end, polygon) == PointLocation::Inside
+    ) {
+        return true;
+    }
+
+    vector<double> parameters = segmentPolygonParameters(segment, polygon);
+
+    for (size_t i = 1; i < parameters.size(); ++i) {
+        double midpoint = (parameters[i - 1] + parameters[i]) / 2.0;
+
+        if (
+            pointInPolygon(pointAlongSegment(segment, midpoint), polygon) ==
+            PointLocation::Inside
+        ) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool segmentStaysInsidePolygon(
+    const LineSegment& segment,
+    const Polygon& polygon
+) {
+    if (
+        pointInPolygon(segment.start, polygon) == PointLocation::Outside ||
+        pointInPolygon(segment.end, polygon) == PointLocation::Outside
+    ) {
+        return false;
+    }
+
+    vector<double> parameters = segmentPolygonParameters(segment, polygon);
+
+    for (size_t i = 1; i < parameters.size(); ++i) {
+        double midpoint = (parameters[i - 1] + parameters[i]) / 2.0;
+
+        if (
+            pointInPolygon(pointAlongSegment(segment, midpoint), polygon) ==
+            PointLocation::Outside
+        ) {
+            return false;
+        }
+    }
+
+    return true;
+}

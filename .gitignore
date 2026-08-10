@@ -5,6 +5,7 @@
 /waypoints.csv
 /field_polygon.csv
 /camera_footprint.csv
+/obstacles.csv
 
 # Compiled artifacts
 *.dSYM/

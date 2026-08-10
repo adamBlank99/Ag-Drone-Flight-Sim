@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -6,6 +7,7 @@
 #include "CameraConfig.h"
 #include "DroneConfig.h"
 #include "Geometry.h"
+#include "Obstacle.h"
 #include "Polygon.h"
 #include "RouteOptimizer.h"
 #include "RouteStatistics.h"
@@ -46,10 +48,52 @@ int main() {
         {0.0, 50.0}
     }};
 
+    vector<Obstacle> obstacles{
+        {
+            "barn_1",
+            ObstacleType::Barn,
+            {{{45.0, 25.0}, {65.0, 25.0}, {65.0, 40.0}, {45.0, 40.0}}},
+            2.0
+        },
+        {
+            "pond_1",
+            ObstacleType::Pond,
+            {{
+                {74.0, 48.0},
+                {84.0, 46.0},
+                {90.0, 52.0},
+                {87.0, 59.0},
+                {77.0, 60.0},
+                {71.0, 54.0}
+            }},
+            2.0
+        },
+        {
+            "restricted_1",
+            ObstacleType::Restricted,
+            {{{20.0, 52.0}, {32.0, 52.0}, {32.0, 62.0}, {20.0, 62.0}}},
+            1.0
+        },
+        {
+            "tree_cluster_1",
+            ObstacleType::Trees,
+            {{
+                {12.0, 18.0},
+                {20.0, 16.0},
+                {27.0, 21.0},
+                {25.0, 30.0},
+                {17.0, 33.0},
+                {10.0, 27.0}
+            }},
+            1.5
+        }
+    };
+
     vector<double> candidateAngles = generateCandidateAngles();
     RouteOptimizationResult optimization = optimizeRoute(
         irregularField,
         drone,
+        obstacles,
         candidateAngles,
         10.0
     );
@@ -59,16 +103,19 @@ int main() {
     ofstream waypointFile("waypoints.csv");
     ofstream polygonFile("field_polygon.csv");
     ofstream footprintFile("camera_footprint.csv");
+    ofstream obstacleFile("obstacles.csv");
 
-    if (!waypointFile || !polygonFile || !footprintFile) {
+    if (!waypointFile || !polygonFile || !footprintFile || !obstacleFile) {
         cerr << "Could not create visualization data files\n";
         return 1;
     }
 
     waypointFile
-        << "angle_degrees,score,total_distance,turns,x,y\n";
+        << "angle_degrees,score,total_distance,turns,waypoint_type,x,y\n";
     polygonFile << "x,y\n";
     footprintFile << "width,height\n";
+    obstacleFile
+        << "name,type,clearance,boundary,vertex_index,x,y\n";
 
     CameraFootprint footprint = calculateFootprint(drone.camera);
     double laneSpacing = calculateLaneSpacing(
@@ -107,20 +154,43 @@ int main() {
         separateSegment
     );
 
-    for (const Point& waypoint : path) {
+    for (size_t i = 0; i < path.size(); ++i) {
         waypointFile << setprecision(15)
                      << bestRoute.angleDegrees << ","
                      << bestRoute.score << ","
                      << routeStatistics.totalDistance << ","
                      << routeStatistics.transitionSegments << ","
-                     << waypoint.x << ","
-                     << waypoint.y << "\n";
+                     << waypointTypeName(bestRoute.waypointTypes[i]) << ","
+                     << path[i].x << ","
+                     << path[i].y << "\n";
     }
 
     for (const Point& vertex : irregularField.vertices) {
         polygonFile
             << vertex.x << ","
             << vertex.y << "\n";
+    }
+
+    for (const Obstacle& obstacle : obstacles) {
+        Polygon safetyBoundary = calculateSafetyBoundary(obstacle);
+
+        for (size_t i = 0; i < obstacle.boundary.vertices.size(); ++i) {
+            const Point& vertex = obstacle.boundary.vertices[i];
+            obstacleFile
+                << obstacle.name << ","
+                << obstacleTypeName(obstacle.type) << ","
+                << obstacle.clearance << ",original,"
+                << i << "," << vertex.x << "," << vertex.y << "\n";
+        }
+
+        for (size_t i = 0; i < safetyBoundary.vertices.size(); ++i) {
+            const Point& vertex = safetyBoundary.vertices[i];
+            obstacleFile
+                << obstacle.name << ","
+                << obstacleTypeName(obstacle.type) << ","
+                << obstacle.clearance << ",safety,"
+                << i << "," << vertex.x << "," << vertex.y << "\n";
+        }
     }
 
     cout << "AGRICULTURAL DRONE SURVEY SYSTEM\n\n";
@@ -134,6 +204,13 @@ int main() {
     cout << "maxX: " << boundingBox.maxX << " m\n";
     cout << "minY: " << boundingBox.minY << " m\n";
     cout << "maxY: " << boundingBox.maxY << " m\n\n";
+
+    cout << "Obstacles and no-fly zones: " << obstacles.size() << "\n";
+    for (const Obstacle& obstacle : obstacles) {
+        cout << obstacle.name << ": " << obstacleTypeName(obstacle.type)
+             << ", clearance " << obstacle.clearance << " m\n";
+    }
+    cout << "\n";
 
     cout << "Point-in-polygon tests:\n";
     cout << "Inside point (50, 40): "
@@ -198,6 +275,13 @@ int main() {
     cout << "Transition segments: "
          << routeStatistics.transitionSegments << "\n";
     cout << "Waypoints: " << routeStatistics.waypointCount << "\n";
+    cout << "Detour waypoints: "
+         << count(
+                bestRoute.waypointTypes.begin(),
+                bestRoute.waypointTypes.end(),
+                WaypointType::Detour
+            )
+         << "\n";
     cout << "Total distance: " << routeStatistics.totalDistance << " m\n";
     cout << fixed << setprecision(1);
     cout << "Estimated flight time: "

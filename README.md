@@ -40,10 +40,17 @@ The C++ program writes `waypoints.csv` and `field_polygon.csv`, which the
 Python visualizer reads. It also writes `camera_footprint.csv` with the
 calculated ground footprint.
 
-To show the camera footprint at the first waypoint:
+The visualization shows a movable drone and its calculated camera footprint.
+Click a route point to move the drone directly to that waypoint, or use the
+Previous, Play/Pause, and Next buttons to follow the complete route. The orange
+line shows the portion of the route already flown. A translucent gold swath is
+left behind by the camera to show everything it has seen. This coverage remains
+visible when stepping backward; use Reset to clear it and return to waypoint 1.
+
+The footprint is visible by default. To hide it:
 
 ```sh
-python3 python/visualize_field.py --show-footprint
+python3 python/visualize_field.py --hide-footprint
 ```
 
 The camera model uses separate overlap values:
@@ -60,3 +67,8 @@ score = total distance + 10 meters per turn
 
 `waypoints.csv` stores the selected angle, score, distance, turn count, and
 optimized waypoints for the Python visualization.
+
+Obstacle-aware planning clips passes around barns, ponds, tree clusters, and
+restricted zones. The sample mission includes all four obstacle types.
+`obstacles.csv` stores original obstacle polygons and conservative safety
+boundaries. Detour waypoints are identified in `waypoints.csv`.

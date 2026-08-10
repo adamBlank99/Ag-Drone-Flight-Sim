@@ -9,6 +9,13 @@ set(DRONE_TEST_CASES
     rotation_geometry
     candidate_routes
     best_angle
+    obstacle_intersections
+    multiple_obstacles
+    obstacle_near_edge
+    narrow_gap
+    concave_obstacle
+    blocked_pass
+    obstacle_optimization
     polygon_area
     bounding_box
     point_in_polygon

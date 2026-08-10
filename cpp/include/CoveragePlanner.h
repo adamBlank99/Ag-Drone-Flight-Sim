@@ -24,4 +24,10 @@ public:
         const Polygon& field,
         const DroneConfig& drone
     ) const;
+
+    std::vector<LineSegment> generateCoverageSegments(
+        const Polygon& field,
+        const DroneConfig& drone,
+        const std::vector<Polygon>& exclusionZones
+    ) const;
 };

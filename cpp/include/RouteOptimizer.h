@@ -3,6 +3,8 @@
 #include <vector>
 
 #include "DroneConfig.h"
+#include "MissionRoute.h"
+#include "Obstacle.h"
 #include "Point.h"
 #include "Polygon.h"
 #include "RouteStatistics.h"
@@ -12,6 +14,7 @@ struct RouteCandidate {
     RouteStatistics statistics;
     double score;
     std::vector<Point> waypoints;
+    std::vector<WaypointType> waypointTypes;
 };
 
 struct RouteOptimizationResult {
@@ -28,6 +31,13 @@ double calculateRouteScore(
 RouteOptimizationResult optimizeRoute(
     const Polygon& field,
     const DroneConfig& drone,
+    const std::vector<double>& candidateAngles,
+    double turnPenalty = 10.0
+);
+RouteOptimizationResult optimizeRoute(
+    const Polygon& field,
+    const DroneConfig& drone,
+    const std::vector<Obstacle>& obstacles,
     const std::vector<double>& candidateAngles,
     double turnPenalty = 10.0
 );

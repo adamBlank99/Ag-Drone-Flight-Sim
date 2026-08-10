@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <vector>
 
+#include "MissionRoute.h"
 #include "Point.h"
 
 struct RouteStatistics {
@@ -15,5 +16,9 @@ struct RouteStatistics {
 
 RouteStatistics calculateRouteStatistics(
     const std::vector<Point>& path,
+    double speed
+);
+RouteStatistics calculateRouteStatistics(
+    const MissionRoute& route,
     double speed
 );

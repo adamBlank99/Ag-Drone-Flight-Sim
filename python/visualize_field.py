@@ -2,16 +2,21 @@
 
 import argparse
 import csv
+import math
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+from matplotlib.collections import PolyCollection
 from matplotlib.patches import Polygon, Rectangle
+from matplotlib.transforms import Affine2D
+from matplotlib.widgets import Button
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 WAYPOINT_FILE = PROJECT_ROOT / "waypoints.csv"
 POLYGON_FILE = PROJECT_ROOT / "field_polygon.csv"
 FOOTPRINT_FILE = PROJECT_ROOT / "camera_footprint.csv"
+OBSTACLE_FILE = PROJECT_ROOT / "obstacles.csv"
 
 
 def read_points(file_path):
@@ -47,23 +52,62 @@ def read_optimized_route(file_path):
         "turns": int(rows[0]["turns"]),
     }
     points = [(float(row["x"]), float(row["y"])) for row in rows]
+    waypoint_types = [row["waypoint_type"] for row in rows]
 
-    return metadata, points
+    return metadata, points, waypoint_types
 
 
-parser = argparse.ArgumentParser(description="Visualize the generated drone route.")
-parser.add_argument(
-    "--show-footprint",
-    action="store_true",
-    help="show the camera footprint centered on the first waypoint",
+def read_obstacles(file_path):
+    if not file_path.exists():
+        raise SystemExit(f"Run ./build/drone_survey first to generate {file_path.name}")
+
+    grouped = {}
+
+    with file_path.open(newline="") as file:
+        for row in csv.DictReader(file):
+            key = (row["name"], row["boundary"])
+            grouped.setdefault(
+                key,
+                {
+                    "name": row["name"],
+                    "type": row["type"],
+                    "clearance": float(row["clearance"]),
+                    "boundary": row["boundary"],
+                    "vertices": [],
+                },
+            )
+            grouped[key]["vertices"].append(
+                (float(row["x"]), float(row["y"]))
+            )
+
+    return list(grouped.values())
+
+
+parser = argparse.ArgumentParser(
+    description="Visualize and interact with the generated drone route."
 )
+footprint_group = parser.add_mutually_exclusive_group()
+footprint_group.add_argument(
+    "--show-footprint",
+    dest="show_footprint",
+    action="store_true",
+    help="show the moving camera footprint (default)",
+)
+footprint_group.add_argument(
+    "--hide-footprint",
+    dest="show_footprint",
+    action="store_false",
+    help="hide the moving camera footprint",
+)
+parser.set_defaults(show_footprint=True)
 arguments = parser.parse_args()
 
-route_metadata, waypoints = read_optimized_route(WAYPOINT_FILE)
+route_metadata, waypoints, waypoint_types = read_optimized_route(WAYPOINT_FILE)
 polygon_vertices = read_points(POLYGON_FILE)
+obstacles = read_obstacles(OBSTACLE_FILE)
 
 
-figure, axes = plt.subplots()
+figure, axes = plt.subplots(figsize=(12, 7.5))
 
 field = Polygon(
     polygon_vertices,
@@ -74,6 +118,43 @@ field = Polygon(
 )
 
 axes.add_patch(field)
+
+obstacle_colors = {
+    "barn": "saddlebrown",
+    "pond": "deepskyblue",
+    "trees": "forestgreen",
+    "restricted": "crimson",
+}
+shown_types = set()
+safety_label_added = False
+
+for obstacle in obstacles:
+    if obstacle["boundary"] == "safety":
+        safety_boundary = Polygon(
+            obstacle["vertices"],
+            closed=True,
+            fill=False,
+            edgecolor="darkorange",
+            linestyle="--",
+            linewidth=1.5,
+            label="Safety clearance" if not safety_label_added else None,
+        )
+        axes.add_patch(safety_boundary)
+        safety_label_added = True
+        continue
+
+    obstacle_type = obstacle["type"]
+    obstacle_patch = Polygon(
+        obstacle["vertices"],
+        closed=True,
+        facecolor=obstacle_colors.get(obstacle_type, "gray"),
+        edgecolor="black",
+        alpha=0.75,
+        linewidth=1.5,
+        label=obstacle_type.title() if obstacle_type not in shown_types else None,
+    )
+    axes.add_patch(obstacle_patch)
+    shown_types.add(obstacle_type)
 
 polygon_x = [point[0] for point in polygon_vertices]
 polygon_y = [point[1] for point in polygon_vertices]
@@ -93,45 +174,329 @@ axes.grid(True)
 x_values = [point[0] for point in waypoints]
 y_values = [point[1] for point in waypoints]
 
-axes.plot(
+route_line, = axes.plot(
     x_values,
     y_values,
     color="blue",
     marker="o",
     linewidth=2,
     label=f"Optimized route ({route_metadata['angle']:g}°)",
+    picker=7,
 )
 
-if arguments.show_footprint:
-    footprint_width, footprint_height = read_points(FOOTPRINT_FILE)[0]
-    first_x, first_y = waypoints[0]
+detour_points = [
+    point
+    for point, waypoint_type in zip(waypoints, waypoint_types)
+    if waypoint_type == "detour"
+]
 
-    camera_footprint = Rectangle(
+if detour_points:
+    axes.scatter(
+        [point[0] for point in detour_points],
+        [point[1] for point in detour_points],
+        color="red",
+        marker="D",
+        s=45,
+        label="Detour waypoint",
+        zorder=5,
+    )
+
+footprint_width, footprint_height = read_points(FOOTPRINT_FILE)[0]
+first_x, first_y = waypoints[0]
+
+coverage_trail = PolyCollection(
+    [],
+    facecolors="gold",
+    edgecolors="goldenrod",
+    linewidths=0.4,
+    alpha=0.22,
+    label="Camera coverage trail",
+    zorder=3,
+)
+axes.add_collection(coverage_trail)
+
+camera_footprint = Rectangle(
+    (
+        first_x - footprint_height / 2.0,
+        first_y - footprint_width / 2.0,
+    ),
+    footprint_height,
+    footprint_width,
+    facecolor="orange",
+    edgecolor="darkorange",
+    alpha=0.30,
+    linewidth=2,
+    label="Camera FOV footprint",
+    visible=arguments.show_footprint,
+    zorder=6,
+)
+axes.add_patch(camera_footprint)
+
+drone_marker, = axes.plot(
+    [first_x],
+    [first_y],
+    color="black",
+    marker="^",
+    markersize=11,
+    linestyle="None",
+    label="Drone",
+    zorder=8,
+)
+
+completed_route, = axes.plot(
+    [first_x],
+    [first_y],
+    color="orange",
+    linewidth=3,
+    zorder=4,
+)
+
+selected_waypoint, = axes.plot(
+    [first_x],
+    [first_y],
+    marker="o",
+    markersize=13,
+    markerfacecolor="none",
+    markeredgecolor="black",
+    markeredgewidth=2,
+    linestyle="None",
+    zorder=9,
+)
+
+for number, ((x, y), waypoint_type) in enumerate(
+    zip(waypoints, waypoint_types),
+    start=1,
+):
+    if waypoint_type == "detour":
+        axes.annotate(
+            f"D{number}",
+            (x, y),
+            xytext=(5, 5),
+            textcoords="offset points",
+        )
+
+current_waypoint = 0
+furthest_waypoint = 0
+is_playing = False
+
+
+def route_heading(waypoint_index):
+    """Return the heading from this waypoint toward the next route point."""
+    if len(waypoints) == 1:
+        return route_metadata["angle"]
+
+    neighbor_index = (
+        waypoint_index + 1
+        if waypoint_index < len(waypoints) - 1
+        else waypoint_index - 1
+    )
+    x, y = waypoints[waypoint_index]
+    neighbor_x, neighbor_y = waypoints[neighbor_index]
+
+    if waypoint_index == len(waypoints) - 1:
+        delta_x = x - neighbor_x
+        delta_y = y - neighbor_y
+    else:
+        delta_x = neighbor_x - x
+        delta_y = neighbor_y - y
+
+    if delta_x == 0.0 and delta_y == 0.0:
+        return route_metadata["angle"]
+
+    return math.degrees(math.atan2(delta_y, delta_x))
+
+
+def coverage_rectangle(center, forward_length, cross_width, heading):
+    """Build the corners of one rotated camera-coverage rectangle."""
+    angle = math.radians(heading)
+    forward_x = math.cos(angle)
+    forward_y = math.sin(angle)
+    cross_x = -forward_y
+    cross_y = forward_x
+    half_forward = forward_length / 2.0
+    half_cross = cross_width / 2.0
+    center_x, center_y = center
+
+    return [
         (
-            first_x - footprint_width / 2.0,
-            first_y - footprint_height / 2.0,
+            center_x - forward_x * half_forward - cross_x * half_cross,
+            center_y - forward_y * half_forward - cross_y * half_cross,
         ),
-        footprint_width,
-        footprint_height,
-        facecolor="orange",
-        edgecolor="darkorange",
-        alpha=0.35,
-        linewidth=2,
-        label="Camera footprint at waypoint 1",
+        (
+            center_x + forward_x * half_forward - cross_x * half_cross,
+            center_y + forward_y * half_forward - cross_y * half_cross,
+        ),
+        (
+            center_x + forward_x * half_forward + cross_x * half_cross,
+            center_y + forward_y * half_forward + cross_y * half_cross,
+        ),
+        (
+            center_x - forward_x * half_forward + cross_x * half_cross,
+            center_y - forward_y * half_forward + cross_y * half_cross,
+        ),
+    ]
+
+
+def build_coverage_trail(last_waypoint):
+    """Create camera footprints and swept swaths through the flown route."""
+    coverage_polygons = []
+
+    for index in range(last_waypoint + 1):
+        coverage_polygons.append(
+            coverage_rectangle(
+                waypoints[index],
+                footprint_height,
+                footprint_width,
+                route_heading(index),
+            )
+        )
+
+    for index in range(1, last_waypoint + 1):
+        start_x, start_y = waypoints[index - 1]
+        end_x, end_y = waypoints[index]
+        delta_x = end_x - start_x
+        delta_y = end_y - start_y
+        segment_length = math.hypot(delta_x, delta_y)
+
+        if segment_length == 0.0:
+            continue
+
+        coverage_polygons.append(
+            coverage_rectangle(
+                ((start_x + end_x) / 2.0, (start_y + end_y) / 2.0),
+                segment_length,
+                footprint_width,
+                math.degrees(math.atan2(delta_y, delta_x)),
+            )
+        )
+
+    return coverage_polygons
+
+
+def move_drone(waypoint_index):
+    """Move the drone and its ground footprint to one route waypoint."""
+    global current_waypoint, furthest_waypoint
+
+    current_waypoint = max(0, min(waypoint_index, len(waypoints) - 1))
+    furthest_waypoint = max(furthest_waypoint, current_waypoint)
+    x, y = waypoints[current_waypoint]
+    heading = route_heading(current_waypoint)
+
+    drone_marker.set_data([x], [y])
+    selected_waypoint.set_data([x], [y])
+    completed_route.set_data(
+        x_values[: furthest_waypoint + 1],
+        y_values[: furthest_waypoint + 1],
     )
-    axes.add_patch(camera_footprint)
-    axes.set_xlim(
-        min(polygon_x + [first_x - footprint_width / 2.0]) - margin,
-        max(polygon_x + [first_x + footprint_width / 2.0]) + margin,
+    coverage_trail.set_verts(build_coverage_trail(furthest_waypoint))
+
+    camera_footprint.set_xy(
+        (
+            x - footprint_height / 2.0,
+            y - footprint_width / 2.0,
+        )
     )
-    axes.set_ylim(
-        min(polygon_y + [first_y - footprint_height / 2.0]) - margin,
-        max(polygon_y + [first_y + footprint_height / 2.0]) + margin,
+    camera_footprint.set_transform(
+        Affine2D().rotate_deg_around(
+            x,
+            y,
+            heading,
+        ) + axes.transData
     )
 
-for number, (x, y) in enumerate(waypoints, start=1):
-    axes.annotate(str(number), (x, y), xytext=(5, 5), textcoords="offset points")
+    waypoint_status.set_text(
+        f"Waypoint {current_waypoint + 1}/{len(waypoints)}  |  "
+        f"Type: {waypoint_types[current_waypoint].replace('_', ' ')}  |  "
+        f"Position: ({x:.1f}, {y:.1f}) m  |  Heading: {heading:.0f}°  |  "
+        f"Coverage through {furthest_waypoint + 1}"
+    )
+    figure.canvas.draw_idle()
 
-axes.legend()
+
+def select_waypoint(event):
+    if event.artist is not route_line or not len(event.ind):
+        return
+
+    move_drone(int(event.ind[0]))
+
+
+def previous_waypoint(_event):
+    move_drone(current_waypoint - 1)
+
+
+def next_waypoint(_event):
+    move_drone(current_waypoint + 1)
+
+
+def advance_animation():
+    if not is_playing:
+        return
+
+    if current_waypoint >= len(waypoints) - 1:
+        stop_animation()
+        return
+
+    move_drone(current_waypoint + 1)
+
+    if current_waypoint >= len(waypoints) - 1:
+        stop_animation()
+
+
+def stop_animation():
+    global is_playing
+
+    is_playing = False
+    animation_timer.stop()
+    play_button.label.set_text("Play")
+
+
+def reset_flight(_event=None):
+    global furthest_waypoint
+
+    stop_animation()
+    furthest_waypoint = 0
+    move_drone(0)
+
+
+def toggle_animation(_event):
+    global is_playing
+
+    if is_playing:
+        stop_animation()
+        return
+
+    if current_waypoint >= len(waypoints) - 1:
+        reset_flight()
+
+    is_playing = True
+    play_button.label.set_text("Pause")
+    animation_timer.start()
+
+
+waypoint_status = figure.text(0.50, 0.105, "", ha="center")
+
+previous_axes = figure.add_axes([0.10, 0.02, 0.09, 0.055])
+play_axes = figure.add_axes([0.20, 0.02, 0.09, 0.055])
+next_axes = figure.add_axes([0.30, 0.02, 0.09, 0.055])
+reset_axes = figure.add_axes([0.40, 0.02, 0.09, 0.055])
+
+previous_button = Button(previous_axes, "Previous")
+play_button = Button(play_axes, "Play")
+next_button = Button(next_axes, "Next")
+reset_button = Button(reset_axes, "Reset")
+
+previous_button.on_clicked(previous_waypoint)
+play_button.on_clicked(toggle_animation)
+next_button.on_clicked(next_waypoint)
+reset_button.on_clicked(reset_flight)
+
+animation_timer = figure.canvas.new_timer(interval=350)
+animation_timer.add_callback(advance_animation)
+
+figure.canvas.mpl_connect("pick_event", select_waypoint)
+
+axes.legend(loc="upper left", bbox_to_anchor=(1.02, 1.0))
+figure.subplots_adjust(left=0.08, right=0.78, bottom=0.18, top=0.92)
+move_drone(0)
 
 plt.show()

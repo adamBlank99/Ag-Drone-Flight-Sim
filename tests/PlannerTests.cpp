@@ -9,6 +9,9 @@
 #include "CoveragePlanner.h"
 #include "DroneConfig.h"
 #include "Geometry.h"
+#include "MissionRoute.h"
+#include "Obstacle.h"
+#include "ObstacleRouter.h"
 #include "Polygon.h"
 #include "RouteOptimizer.h"
 #include "RouteStatistics.h"
@@ -70,6 +73,43 @@ Polygon concaveField() {
         {3.0, 10.0},
         {0.0, 10.0}
     }};
+}
+
+Polygon obstacleTestField() {
+    return {{
+        {0.0, 0.0},
+        {100.0, 0.0},
+        {100.0, 50.0},
+        {0.0, 50.0}
+    }};
+}
+
+DroneConfig obstacleTestDrone() {
+    return {{5.0, 90.0, 60.0, 0.0, 0.70}, 5.0};
+}
+
+vector<Polygon> safetyBoundaries(const vector<Obstacle>& obstacles) {
+    vector<Polygon> boundaries;
+
+    for (const Obstacle& obstacle : obstacles) {
+        boundaries.push_back(calculateSafetyBoundary(obstacle));
+    }
+
+    return boundaries;
+}
+
+void requireSegmentsAvoid(
+    const vector<LineSegment>& segments,
+    const vector<Polygon>& exclusions
+) {
+    for (const LineSegment& segment : segments) {
+        for (const Polygon& exclusion : exclusions) {
+            require(
+                !segmentIntersectsPolygonInterior(segment, exclusion),
+                "Coverage segment enters an exclusion zone"
+            );
+        }
+    }
 }
 
 void requireWaypointsInside(
@@ -318,6 +358,253 @@ void testBestAngle() {
         "Rotated field best angle must not be zero"
     );
     requireWaypointsInside(result.bestRoute.waypoints, rotatedRectangle);
+}
+
+void testObstacleIntersections() {
+    Polygon field = obstacleTestField();
+    DroneConfig drone = obstacleTestDrone();
+    vector<Obstacle> obstacles{
+        {
+            "barn",
+            ObstacleType::Barn,
+            {{{40.0, 10.0}, {60.0, 10.0}, {60.0, 20.0}, {40.0, 20.0}}},
+            0.0
+        }
+    };
+    vector<Polygon> exclusions = safetyBoundaries(obstacles);
+    CoveragePlanner planner;
+    vector<LineSegment> segments =
+        planner.generateCoverageSegments(field, drone, exclusions);
+
+    require(segments.size() == 6, "Blocked lane must split into two passes");
+    requireSegmentsAvoid(segments, exclusions);
+
+    MissionRoute route = buildSafeMissionRoute(field, segments, exclusions);
+    require(route.coveragePasses == segments.size(), "Obstacle pass count");
+    require(
+        routeAvoidsExclusionZones(route, exclusions),
+        "Detoured route must avoid the direct obstacle"
+    );
+    require(
+        find(
+            route.waypointTypes.begin(),
+            route.waypointTypes.end(),
+            WaypointType::Detour
+        ) != route.waypointTypes.end(),
+        "A split pass must create a detour waypoint"
+    );
+}
+
+void testMultipleObstacles() {
+    Polygon field = obstacleTestField();
+    DroneConfig drone = obstacleTestDrone();
+    vector<Obstacle> obstacles{
+        {
+            "barn",
+            ObstacleType::Barn,
+            {{{30.0, 10.0}, {45.0, 10.0}, {45.0, 22.0}, {30.0, 22.0}}},
+            1.0
+        },
+        {
+            "restricted",
+            ObstacleType::Restricted,
+            {{{65.0, 28.0}, {82.0, 28.0}, {82.0, 40.0}, {65.0, 40.0}}},
+            1.0
+        }
+    };
+    vector<Polygon> exclusions = safetyBoundaries(obstacles);
+    CoveragePlanner planner;
+    vector<LineSegment> segments =
+        planner.generateCoverageSegments(field, drone, exclusions);
+    MissionRoute route = buildSafeMissionRoute(field, segments, exclusions);
+
+    require(segments.size() > 5, "Multiple obstacles must split coverage passes");
+    requireSegmentsAvoid(segments, exclusions);
+    require(
+        routeAvoidsExclusionZones(route, exclusions),
+        "Route must avoid every obstacle and no-fly zone"
+    );
+
+    RouteStatistics statistics = calculateRouteStatistics(route, drone.speed);
+    require(statistics.totalDistance > 0.0, "Obstacle route distance");
+    require(
+        statistics.transitionSegments >= statistics.coveragePasses - 1,
+        "Detours must be included in transition metrics"
+    );
+}
+
+void testObstacleNearEdge() {
+    Polygon field = obstacleTestField();
+    DroneConfig drone = obstacleTestDrone();
+    Polygon edgeObstacle{{
+        {0.0, 20.0},
+        {15.0, 20.0},
+        {15.0, 30.0},
+        {0.0, 30.0}
+    }};
+    CoveragePlanner planner;
+    vector<LineSegment> segments =
+        planner.generateCoverageSegments(field, drone, {edgeObstacle});
+
+    bool foundClippedEdgePass = false;
+
+    for (const LineSegment& segment : segments) {
+        if (abs(segment.start.y - 25.0) <= TOLERANCE) {
+            requireNear(segment.start.x, 15.0, "Edge obstacle clipped start");
+            foundClippedEdgePass = true;
+        }
+    }
+
+    require(foundClippedEdgePass, "Obstacle near field edge must clip cleanly");
+    requireSegmentsAvoid(segments, {edgeObstacle});
+}
+
+void testNarrowGap() {
+    Polygon field = obstacleTestField();
+    DroneConfig drone = obstacleTestDrone();
+    vector<Polygon> exclusions{
+        {{{40.0, 10.0}, {60.0, 10.0}, {60.0, 22.0}, {40.0, 22.0}}},
+        {{{40.0, 28.0}, {60.0, 28.0}, {60.0, 40.0}, {40.0, 40.0}}}
+    };
+    CoveragePlanner planner;
+    vector<LineSegment> segments =
+        planner.generateCoverageSegments(field, drone, exclusions);
+    bool fullPassThroughGap = false;
+
+    for (const LineSegment& segment : segments) {
+        if (
+            abs(segment.start.y - 25.0) <= TOLERANCE &&
+            abs(segment.start.x) <= TOLERANCE &&
+            abs(segment.end.x - 100.0) <= TOLERANCE
+        ) {
+            fullPassThroughGap = true;
+        }
+    }
+
+    require(fullPassThroughGap, "Valid narrow gap must remain available");
+    requireSegmentsAvoid(segments, exclusions);
+}
+
+void testConcaveObstacle() {
+    Polygon field = obstacleTestField();
+    DroneConfig drone = obstacleTestDrone();
+    Polygon concaveObstacle{{
+        {30.0, 10.0},
+        {60.0, 10.0},
+        {60.0, 20.0},
+        {40.0, 20.0},
+        {40.0, 40.0},
+        {30.0, 40.0}
+    }};
+    CoveragePlanner planner;
+    vector<LineSegment> segments =
+        planner.generateCoverageSegments(field, drone, {concaveObstacle});
+
+    requireSegmentsAvoid(segments, {concaveObstacle});
+
+    bool foundNarrowConcaveCut = false;
+
+    for (const LineSegment& segment : segments) {
+        if (
+            abs(segment.start.y - 25.0) <= TOLERANCE &&
+            abs(segment.start.x - 40.0) <= TOLERANCE
+        ) {
+            foundNarrowConcaveCut = true;
+        }
+    }
+
+    require(foundNarrowConcaveCut, "Concave obstacle shape must clip exactly");
+}
+
+void testBlockedPass() {
+    Polygon field = obstacleTestField();
+    DroneConfig drone = obstacleTestDrone();
+    Polygon blockingZone{{
+        {0.0, 20.0},
+        {100.0, 20.0},
+        {100.0, 30.0},
+        {0.0, 30.0}
+    }};
+    CoveragePlanner planner;
+    vector<LineSegment> segments =
+        planner.generateCoverageSegments(field, drone, {blockingZone});
+
+    for (const LineSegment& segment : segments) {
+        require(
+            abs(segment.start.y - 25.0) > TOLERANCE,
+            "Completely blocked pass must be removed"
+        );
+    }
+
+    require(segments.size() == 4, "Exactly one blocked lane must be removed");
+}
+
+void testObstacleOptimization() {
+    Polygon field = sampleField();
+    DroneConfig drone{{10.0, 90.0, 60.0, 0.30, 0.70}, 6.0};
+    vector<Obstacle> obstacles{
+        {
+            "barn",
+            ObstacleType::Barn,
+            {{{45.0, 25.0}, {65.0, 25.0}, {65.0, 40.0}, {45.0, 40.0}}},
+            2.0
+        },
+        {
+            "pond",
+            ObstacleType::Pond,
+            {{
+                {74.0, 48.0},
+                {84.0, 46.0},
+                {90.0, 52.0},
+                {87.0, 59.0},
+                {77.0, 60.0},
+                {71.0, 54.0}
+            }},
+            2.0
+        }
+    };
+    RouteOptimizationResult result = optimizeRoute(
+        field,
+        drone,
+        obstacles,
+        generateCandidateAngles(),
+        10.0
+    );
+    vector<Polygon> exclusions = safetyBoundaries(obstacles);
+
+    require(
+        result.bestRoute.angleDegrees != 0.0,
+        "Obstacle-aware optimization should favor a detour-reducing angle"
+    );
+
+    for (const RouteCandidate& candidate : result.candidates) {
+        MissionRoute route{
+            candidate.waypoints,
+            candidate.waypointTypes,
+            candidate.statistics.coveragePasses,
+            candidate.statistics.transitionSegments
+        };
+        require(
+            routeAvoidsExclusionZones(route, exclusions),
+            "Every optimized candidate must avoid safety boundaries"
+        );
+
+        RouteStatistics recalculated = calculateRouteStatistics(route, drone.speed);
+        requireNear(
+            recalculated.totalDistance,
+            candidate.statistics.totalDistance,
+            "Obstacle candidate distance recomputation"
+        );
+    }
+
+    require(
+        find(
+            result.bestRoute.waypointTypes.begin(),
+            result.bestRoute.waypointTypes.end(),
+            WaypointType::Detour
+        ) != result.bestRoute.waypointTypes.end(),
+        "Validated obstacle field must contain visible detours"
+    );
 }
 
 void testPolygonArea() {
@@ -640,6 +927,13 @@ const vector<TestCase> TEST_CASES{
     {"rotation_geometry", testRotationGeometry},
     {"candidate_routes", testCandidateRoutes},
     {"best_angle", testBestAngle},
+    {"obstacle_intersections", testObstacleIntersections},
+    {"multiple_obstacles", testMultipleObstacles},
+    {"obstacle_near_edge", testObstacleNearEdge},
+    {"narrow_gap", testNarrowGap},
+    {"concave_obstacle", testConcaveObstacle},
+    {"blocked_pass", testBlockedPass},
+    {"obstacle_optimization", testObstacleOptimization},
     {"polygon_area", testPolygonArea},
     {"bounding_box", testBoundingBox},
     {"point_in_polygon", testPointInPolygon},

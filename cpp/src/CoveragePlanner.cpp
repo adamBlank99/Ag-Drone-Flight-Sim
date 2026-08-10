@@ -103,6 +103,54 @@ vector<Point> findHorizontalIntersections(
     return intersections;
 }
 
+vector<LineSegment> pairIntersections(const vector<Point>& intersections) {
+    vector<LineSegment> segments;
+
+    for (size_t i = 0; i < intersections.size(); i += 2) {
+        const Point& start = intersections[i];
+        const Point& end = intersections[i + 1];
+
+        if (abs(end.x - start.x) > EPSILON) {
+            segments.push_back({start, end});
+        }
+    }
+
+    return segments;
+}
+
+vector<LineSegment> subtractSegment(
+    const vector<LineSegment>& sourceSegments,
+    const LineSegment& blockedSegment
+) {
+    vector<LineSegment> remaining;
+
+    for (const LineSegment& source : sourceSegments) {
+        if (
+            blockedSegment.end.x <= source.start.x + EPSILON ||
+            blockedSegment.start.x >= source.end.x - EPSILON
+        ) {
+            remaining.push_back(source);
+            continue;
+        }
+
+        if (blockedSegment.start.x > source.start.x + EPSILON) {
+            remaining.push_back({
+                source.start,
+                {min(blockedSegment.start.x, source.end.x), source.start.y}
+            });
+        }
+
+        if (blockedSegment.end.x < source.end.x - EPSILON) {
+            remaining.push_back({
+                {max(blockedSegment.end.x, source.start.x), source.start.y},
+                source.end
+            });
+        }
+    }
+
+    return remaining;
+}
+
 } // namespace
 
 vector<Point> CoveragePlanner::generatePath(
@@ -157,6 +205,14 @@ vector<LineSegment> CoveragePlanner::generateCoverageSegments(
     const Polygon& field,
     const DroneConfig& drone
 ) const {
+    return generateCoverageSegments(field, drone, {});
+}
+
+vector<LineSegment> CoveragePlanner::generateCoverageSegments(
+    const Polygon& field,
+    const DroneConfig& drone,
+    const vector<Polygon>& exclusionZones
+) const {
     if (field.vertices.size() < 3) {
         throw invalid_argument("A polygon field needs at least three vertices");
     }
@@ -166,17 +222,37 @@ vector<LineSegment> CoveragePlanner::generateCoverageSegments(
     vector<LineSegment> segments;
 
     for (double y : levels) {
-        vector<Point> intersections =
-            findHorizontalIntersections(field, bounds, y);
+        vector<LineSegment> validSegments = pairIntersections(
+            findHorizontalIntersections(field, bounds, y)
+        );
 
-        for (size_t i = 0; i < intersections.size(); i += 2) {
-            const Point& start = intersections[i];
-            const Point& end = intersections[i + 1];
+        for (const Polygon& exclusion : exclusionZones) {
+            if (exclusion.vertices.size() < 3) {
+                throw invalid_argument(
+                    "An exclusion zone needs at least three vertices"
+                );
+            }
 
-            if (abs(end.x - start.x) > EPSILON) {
-                segments.push_back({start, end});
+            BoundingBox exclusionBounds = calculateBoundingBox(exclusion);
+
+            if (y < exclusionBounds.minY || y > exclusionBounds.maxY) {
+                continue;
+            }
+
+            vector<LineSegment> blockedSegments = pairIntersections(
+                findHorizontalIntersections(exclusion, exclusionBounds, y)
+            );
+
+            for (const LineSegment& blocked : blockedSegments) {
+                validSegments = subtractSegment(validSegments, blocked);
             }
         }
+
+        segments.insert(
+            segments.end(),
+            validSegments.begin(),
+            validSegments.end()
+        );
     }
 
     return segments;

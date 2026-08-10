@@ -5,6 +5,7 @@
 
 #include "CoveragePlanner.h"
 #include "Geometry.h"
+#include "ObstacleRouter.h"
 
 using namespace std;
 
@@ -31,6 +32,16 @@ RouteOptimizationResult optimizeRoute(
     const vector<double>& candidateAngles,
     double turnPenalty
 ) {
+    return optimizeRoute(field, drone, {}, candidateAngles, turnPenalty);
+}
+
+RouteOptimizationResult optimizeRoute(
+    const Polygon& field,
+    const DroneConfig& drone,
+    const vector<Obstacle>& obstacles,
+    const vector<double>& candidateAngles,
+    double turnPenalty
+) {
     if (candidateAngles.empty()) {
         throw invalid_argument("At least one candidate angle is required");
     }
@@ -46,30 +57,53 @@ RouteOptimizationResult optimizeRoute(
     };
 
     CoveragePlanner planner;
+    vector<Polygon> safetyBoundaries;
+
+    for (const Obstacle& obstacle : obstacles) {
+        safetyBoundaries.push_back(calculateSafetyBoundary(obstacle));
+    }
+
     vector<RouteCandidate> candidates;
     candidates.reserve(candidateAngles.size());
     size_t bestIndex = 0;
 
     for (double angle : candidateAngles) {
         Polygon rotatedField = rotatePolygon(field, center, -angle);
-        vector<Point> rotatedPath =
-            planner.generatePath(rotatedField, drone);
-        vector<Point> originalPath;
-        originalPath.reserve(rotatedPath.size());
+        vector<Polygon> rotatedExclusions;
+        rotatedExclusions.reserve(safetyBoundaries.size());
 
-        for (const Point& waypoint : rotatedPath) {
-            originalPath.push_back(rotatePoint(waypoint, center, angle));
+        for (const Polygon& safetyBoundary : safetyBoundaries) {
+            rotatedExclusions.push_back(
+                rotatePolygon(safetyBoundary, center, -angle)
+            );
+        }
+
+        vector<LineSegment> coverageSegments =
+            planner.generateCoverageSegments(
+                rotatedField,
+                drone,
+                rotatedExclusions
+            );
+        MissionRoute mission = buildSafeMissionRoute(
+            rotatedField,
+            coverageSegments,
+            rotatedExclusions
+        );
+
+        for (Point& waypoint : mission.waypoints) {
+            waypoint = rotatePoint(waypoint, center, angle);
         }
 
         RouteStatistics statistics =
-            calculateRouteStatistics(originalPath, drone.speed);
+            calculateRouteStatistics(mission, drone.speed);
         double score = calculateRouteScore(statistics, turnPenalty);
 
         candidates.push_back({
             angle,
             statistics,
             score,
-            std::move(originalPath)
+            std::move(mission.waypoints),
+            std::move(mission.waypointTypes)
         });
 
         if (
