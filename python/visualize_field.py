@@ -50,11 +50,31 @@ def read_optimized_route(file_path):
         "score": float(rows[0]["score"]),
         "distance": float(rows[0]["total_distance"]),
         "turns": int(rows[0]["turns"]),
+        "mission_count": int(rows[0].get("mission_count", 1)),
+        "all_missions_safe": (
+            rows[0].get("all_missions_safe", "true").lower() == "true"
+        ),
     }
     points = [(float(row["x"]), float(row["y"])) for row in rows]
     waypoint_types = [row["waypoint_type"] for row in rows]
+    mission_ids = [int(row.get("mission_id", 1)) for row in rows]
+    mission_safe = [
+        row.get("mission_safe", "true").lower() == "true"
+        for row in rows
+    ]
+    battery_used = [
+        float(row.get("battery_used_percent", 0.0))
+        for row in rows
+    ]
 
-    return metadata, points, waypoint_types
+    return (
+        metadata,
+        points,
+        waypoint_types,
+        mission_ids,
+        mission_safe,
+        battery_used,
+    )
 
 
 def read_obstacles(file_path):
@@ -102,7 +122,14 @@ footprint_group.add_argument(
 parser.set_defaults(show_footprint=True)
 arguments = parser.parse_args()
 
-route_metadata, waypoints, waypoint_types = read_optimized_route(WAYPOINT_FILE)
+(
+    route_metadata,
+    waypoints,
+    waypoint_types,
+    mission_ids,
+    mission_safe,
+    battery_used,
+) = read_optimized_route(WAYPOINT_FILE)
 polygon_vertices = read_points(POLYGON_FILE)
 obstacles = read_obstacles(OBSTACLE_FILE)
 
@@ -167,7 +194,9 @@ axes.set_xlabel("Width (m)")
 axes.set_ylabel("Height (m)")
 axes.set_title(
     f"Agricultural Drone Coverage Route — "
-    f"Selected angle: {route_metadata['angle']:g}°"
+    f"Selected angle: {route_metadata['angle']:g}° — "
+    f"{route_metadata['mission_count']} mission"
+    f"{'s' if route_metadata['mission_count'] != 1 else ''}"
 )
 axes.grid(True)
 
@@ -177,12 +206,43 @@ y_values = [point[1] for point in waypoints]
 route_line, = axes.plot(
     x_values,
     y_values,
-    color="blue",
+    color="blue" if route_metadata["mission_count"] == 1 else "lightgray",
     marker="o",
-    linewidth=2,
-    label=f"Optimized route ({route_metadata['angle']:g}°)",
+    linewidth=2 if route_metadata["mission_count"] == 1 else 1,
+    label=(
+        f"Optimized route ({route_metadata['angle']:g}°)"
+        if route_metadata["mission_count"] == 1
+        else "All mission waypoints"
+    ),
     picker=7,
 )
+
+if route_metadata["mission_count"] > 1:
+    mission_colors = plt.get_cmap("tab10")
+
+    for mission_id in sorted(set(mission_ids)):
+        indices = [
+            index
+            for index, point_mission_id in enumerate(mission_ids)
+            if point_mission_id == mission_id
+        ]
+        color = (
+            mission_colors((mission_id - 1) % 10)
+            if mission_safe[indices[0]]
+            else "crimson"
+        )
+        axes.plot(
+            [x_values[index] for index in indices],
+            [y_values[index] for index in indices],
+            color=color,
+            linewidth=2.5,
+            label=(
+                f"Mission {mission_id}: "
+                f"{battery_used[indices[0]]:.1f}% battery"
+                f"{'' if mission_safe[indices[0]] else ' (unsafe)'}"
+            ),
+            zorder=4,
+        )
 
 detour_points = [
     point
@@ -198,6 +258,23 @@ if detour_points:
         marker="D",
         s=45,
         label="Detour waypoint",
+        zorder=5,
+    )
+
+transit_points = [
+    point
+    for point, waypoint_type in zip(waypoints, waypoint_types)
+    if waypoint_type == "transit"
+]
+
+if transit_points:
+    axes.scatter(
+        [point[0] for point in transit_points],
+        [point[1] for point in transit_points],
+        color="purple",
+        marker="s",
+        s=35,
+        label="Home transit",
         zorder=5,
     )
 
@@ -342,6 +419,9 @@ def build_coverage_trail(last_waypoint):
     coverage_polygons = []
 
     for index in range(last_waypoint + 1):
+        if waypoint_types[index] == "transit":
+            continue
+
         coverage_polygons.append(
             coverage_rectangle(
                 waypoints[index],
@@ -352,6 +432,12 @@ def build_coverage_trail(last_waypoint):
         )
 
     for index in range(1, last_waypoint + 1):
+        if (
+            waypoint_types[index - 1] == "transit"
+            or waypoint_types[index] == "transit"
+        ):
+            continue
+
         start_x, start_y = waypoints[index - 1]
         end_x, end_y = waypoints[index]
         delta_x = end_x - start_x
@@ -403,12 +489,18 @@ def move_drone(waypoint_index):
             heading,
         ) + axes.transData
     )
+    camera_footprint.set_visible(
+        arguments.show_footprint
+        and waypoint_types[current_waypoint] != "transit"
+    )
 
     waypoint_status.set_text(
         f"Waypoint {current_waypoint + 1}/{len(waypoints)}  |  "
+        f"Mission {mission_ids[current_waypoint]}/"
+        f"{route_metadata['mission_count']}  |  "
         f"Type: {waypoint_types[current_waypoint].replace('_', ' ')}  |  "
         f"Position: ({x:.1f}, {y:.1f}) m  |  Heading: {heading:.0f}°  |  "
-        f"Coverage through {furthest_waypoint + 1}"
+        f"Battery: {battery_used[current_waypoint]:.1f}%"
     )
     figure.canvas.draw_idle()
 

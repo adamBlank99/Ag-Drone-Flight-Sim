@@ -8,6 +8,8 @@ const char* waypointTypeName(WaypointType type) {
             return "coverage_end";
         case WaypointType::Detour:
             return "detour";
+        case WaypointType::Transit:
+            return "transit";
     }
 
     return "unknown";

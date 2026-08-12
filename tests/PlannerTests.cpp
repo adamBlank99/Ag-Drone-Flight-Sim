@@ -9,6 +9,7 @@
 #include "CoveragePlanner.h"
 #include "DroneConfig.h"
 #include "Geometry.h"
+#include "MissionModel.h"
 #include "MissionRoute.h"
 #include "Obstacle.h"
 #include "ObstacleRouter.h"
@@ -395,6 +396,153 @@ void testObstacleIntersections() {
     );
 }
 
+void testFullRouteSegmentSafety() {
+    Polygon field{{
+        {0.0, 0.0},
+        {100.0, 0.0},
+        {100.0, 100.0},
+        {0.0, 100.0}
+    }};
+    Obstacle obstacle{
+        "buffered_barn",
+        ObstacleType::Barn,
+        {{{42.0, 32.0}, {58.0, 32.0}, {58.0, 68.0}, {42.0, 68.0}}},
+        2.0
+    };
+    vector<Polygon> exclusions{calculateSafetyBoundary(obstacle)};
+    LineSegment crossingSegment{{10.0, 40.0}, {90.0, 40.0}};
+
+    require(
+        pointInPolygon(crossingSegment.start, exclusions[0]) ==
+            PointLocation::Outside,
+        "Unsafe segment start must be outside the safety buffer"
+    );
+    require(
+        pointInPolygon(crossingSegment.end, exclusions[0]) ==
+            PointLocation::Outside,
+        "Unsafe segment end must be outside the safety buffer"
+    );
+    require(
+        !isRouteSegmentSafe(crossingSegment, field, exclusions),
+        "A full segment crossing a buffer must be unsafe"
+    );
+
+    MissionRoute unsafeRoute{
+        {crossingSegment.start, crossingSegment.end},
+        {WaypointType::CoverageStart, WaypointType::CoverageEnd},
+        1,
+        0
+    };
+
+    require(
+        !isMissionRouteSafe(unsafeRoute, field, exclusions),
+        "Route validation must inspect the space between waypoints"
+    );
+    require(
+        !routeAvoidsExclusionZones(unsafeRoute, exclusions),
+        "Compatibility route validation must reject a crossing segment"
+    );
+
+    bool rejectedUnsafeCoverageSegment = false;
+
+    try {
+        buildSafeMissionRoute(field, {crossingSegment}, exclusions);
+    }
+    catch (const invalid_argument&) {
+        rejectedUnsafeCoverageSegment = true;
+    }
+
+    require(
+        rejectedUnsafeCoverageSegment,
+        "Mission construction must reject an unclipped unsafe coverage pass"
+    );
+}
+
+void testShortestObstacleDetour() {
+    Polygon field{{
+        {0.0, 0.0},
+        {100.0, 0.0},
+        {100.0, 100.0},
+        {0.0, 100.0}
+    }};
+    Obstacle obstacle{
+        "buffered_barn",
+        ObstacleType::Barn,
+        {{{42.0, 32.0}, {58.0, 32.0}, {58.0, 68.0}, {42.0, 68.0}}},
+        2.0
+    };
+    vector<Polygon> exclusions{calculateSafetyBoundary(obstacle)};
+    Point start{10.0, 40.0};
+    Point end{90.0, 40.0};
+
+    vector<Point> path = findShortestSafePath(
+        start,
+        end,
+        field,
+        exclusions
+    );
+
+    require(path.size() == 4, "Shortest rectangle detour needs two vertices");
+    requireSamePoint(path.front(), start, "Shortest detour start");
+    requireSamePoint(path[1], {40.0, 30.0}, "Shortest detour first corner");
+    requireSamePoint(path[2], {60.0, 30.0}, "Shortest detour second corner");
+    requireSamePoint(path.back(), end, "Shortest detour end");
+
+    double distance = 0.0;
+
+    for (size_t i = 1; i < path.size(); ++i) {
+        LineSegment segment{path[i - 1], path[i]};
+        require(
+            isRouteSegmentSafe(segment, field, exclusions),
+            "Every shortest-detour edge must be collision-free"
+        );
+        distance += hypot(
+            segment.end.x - segment.start.x,
+            segment.end.y - segment.start.y
+        );
+    }
+
+    requireNear(
+        distance,
+        2.0 * hypot(30.0, 10.0) + 20.0,
+        "Dijkstra must select the shorter side of the obstacle"
+    );
+
+    vector<LineSegment> coverageSegments{
+        {{0.0, 40.0}, start},
+        {{80.0, 40.0}, end}
+    };
+    MissionRoute mission = buildSafeMissionRoute(
+        field,
+        coverageSegments,
+        exclusions
+    );
+
+    require(
+        mission.transitionSegments == 3,
+        "Mission transition must use all three shortest-path edges"
+    );
+    require(
+        mission.waypointTypes[2] == WaypointType::Detour &&
+            mission.waypointTypes[3] == WaypointType::Detour,
+        "Shortest-path corners must be stored as detour waypoints"
+    );
+    requireSamePoint(
+        mission.waypoints[2],
+        {40.0, 30.0},
+        "Mission first detour corner"
+    );
+    requireSamePoint(
+        mission.waypoints[3],
+        {60.0, 30.0},
+        "Mission second detour corner"
+    );
+    require(
+        isMissionRouteSafe(mission, field, exclusions),
+        "Mission using the shortest detour must pass final validation"
+    );
+}
+
 void testMultipleObstacles() {
     Polygon field = obstacleTestField();
     DroneConfig drone = obstacleTestDrone();
@@ -585,8 +733,8 @@ void testObstacleOptimization() {
             candidate.statistics.transitionSegments
         };
         require(
-            routeAvoidsExclusionZones(route, exclusions),
-            "Every optimized candidate must avoid safety boundaries"
+            isMissionRouteSafe(route, field, exclusions),
+            "Every optimized candidate segment must remain collision-free"
         );
 
         RouteStatistics recalculated = calculateRouteStatistics(route, drone.speed);
@@ -594,6 +742,12 @@ void testObstacleOptimization() {
             recalculated.totalDistance,
             candidate.statistics.totalDistance,
             "Obstacle candidate distance recomputation"
+        );
+        requireNear(
+            candidate.score,
+            recalculated.totalDistance +
+                result.turnPenalty * recalculated.transitionSegments,
+            "Obstacle candidate must be scored after detours"
         );
     }
 
@@ -916,6 +1070,195 @@ void testRouteStatistics() {
     require(rejectedOddWaypointCount, "Odd waypoint count must be rejected");
 }
 
+void testFeasibleBatteryMission() {
+    Polygon field{{
+        {0.0, 0.0},
+        {600.0, 0.0},
+        {600.0, 100.0},
+        {0.0, 100.0}
+    }};
+    MissionRoute route{
+        {{0.0, 0.0}, {600.0, 0.0}},
+        {WaypointType::CoverageStart, WaypointType::CoverageEnd},
+        1,
+        0
+    };
+    BatteryConfig battery{
+        200.0,
+        600.0,
+        0.20,
+        2.0,
+        20.0
+    };
+    BatteryMissionPlan plan = planBatteryMissions(
+        route,
+        {0.0, 0.0},
+        field,
+        {},
+        10.0,
+        battery
+    );
+
+    require(plan.singleMissionFeasible, "Short mission must fit one battery");
+    require(plan.allMissionsFeasible, "Short mission plan must be feasible");
+    require(plan.missions.size() == 1, "Short route needs one mission");
+    requireNear(plan.safeFlightTimeSeconds, 480.0, "Reserved flight time");
+    requireNear(
+        plan.singleMissionEstimate.distance,
+        1200.0,
+        "Battery estimate must include return-to-home distance"
+    );
+    require(
+        plan.singleMissionEstimate.turnCount == 1,
+        "Return-to-home reversal must count as a turn"
+    );
+    requireNear(
+        plan.singleMissionEstimate.totalTimeSeconds,
+        142.0,
+        "Cruise, turn, takeoff, and landing time"
+    );
+    requireNear(
+        plan.singleMissionEstimate.energyUsedWh,
+        47.3333333333,
+        "Time-based battery energy estimate"
+    );
+    require(
+        plan.singleMissionEstimate.batteryRemainingPercent >= 20.0,
+        "Feasible mission must preserve its configured reserve"
+    );
+}
+
+MissionRoute fourPassBatteryRoute() {
+    return {
+        {
+            {0.0, 10.0}, {100.0, 10.0},
+            {100.0, 20.0}, {0.0, 20.0},
+            {0.0, 30.0}, {100.0, 30.0},
+            {100.0, 40.0}, {0.0, 40.0}
+        },
+        {
+            WaypointType::CoverageStart, WaypointType::CoverageEnd,
+            WaypointType::CoverageStart, WaypointType::CoverageEnd,
+            WaypointType::CoverageStart, WaypointType::CoverageEnd,
+            WaypointType::CoverageStart, WaypointType::CoverageEnd
+        },
+        4,
+        3
+    };
+}
+
+void testBatteryMissionSplitting() {
+    Polygon field = obstacleTestField();
+    MissionRoute route = fourPassBatteryRoute();
+    BatteryConfig battery{
+        100.0,
+        60.0,
+        0.20,
+        0.0,
+        10.0
+    };
+    BatteryMissionPlan plan = planBatteryMissions(
+        route,
+        {0.0, 0.0},
+        field,
+        {},
+        10.0,
+        battery
+    );
+
+    require(
+        !plan.singleMissionFeasible,
+        "Full route must exceed the reserved one-battery budget"
+    );
+    require(plan.allMissionsFeasible, "Split route must be feasible");
+    require(plan.missions.size() == 2, "Route should split into two missions");
+    require(
+        plan.missions[0].coveragePasses == 2 &&
+            plan.missions[1].coveragePasses == 2,
+        "Splitter must keep complete passes and maximize each battery"
+    );
+    require(
+        plan.missions[0].battery.safeWithReserve &&
+            plan.missions[1].battery.safeWithReserve,
+        "Every split mission must preserve the battery reserve"
+    );
+
+    for (const BatteryMission& mission : plan.missions) {
+        MissionRoute safetyCheck{
+            mission.waypoints,
+            mission.waypointTypes,
+            mission.coveragePasses,
+            0
+        };
+        require(
+            isMissionRouteSafe(safetyCheck, field, {}),
+            "Every battery mission and home transit must remain route-safe"
+        );
+    }
+
+    requireSamePoint(
+        plan.missions[0].waypoints.front(),
+        {0.0, 0.0},
+        "First split mission starts at home"
+    );
+    requireSamePoint(
+        plan.missions[0].waypoints.back(),
+        {0.0, 0.0},
+        "First split mission returns home"
+    );
+    requireSamePoint(
+        plan.missions[1].waypoints.front(),
+        {0.0, 0.0},
+        "Second split mission starts at home"
+    );
+    requireSamePoint(
+        plan.missions[1].waypoints.back(),
+        {0.0, 0.0},
+        "Second split mission returns home"
+    );
+    requireNear(
+        plan.totalCampaignDistance,
+        520.0,
+        "Split campaign includes both home transits"
+    );
+}
+
+void testInfeasibleBatteryMission() {
+    Polygon field = obstacleTestField();
+    MissionRoute route = fourPassBatteryRoute();
+    BatteryConfig battery{
+        100.0,
+        30.0,
+        0.20,
+        0.0,
+        10.0
+    };
+    BatteryMissionPlan plan = planBatteryMissions(
+        route,
+        {0.0, 0.0},
+        field,
+        {},
+        10.0,
+        battery
+    );
+
+    require(!plan.singleMissionFeasible, "Tiny battery cannot fly full route");
+    require(
+        !plan.allMissionsFeasible,
+        "A pass that exceeds one battery must be reported as infeasible"
+    );
+    require(
+        any_of(
+            plan.missions.begin(),
+            plan.missions.end(),
+            [](const BatteryMission& mission) {
+                return !mission.battery.safeWithReserve;
+            }
+        ),
+        "Infeasible plan must identify at least one unsafe mission"
+    );
+}
+
 struct TestCase {
     const char* name;
     void (*run)();
@@ -928,6 +1271,8 @@ const vector<TestCase> TEST_CASES{
     {"candidate_routes", testCandidateRoutes},
     {"best_angle", testBestAngle},
     {"obstacle_intersections", testObstacleIntersections},
+    {"full_route_segment_safety", testFullRouteSegmentSafety},
+    {"shortest_obstacle_detour", testShortestObstacleDetour},
     {"multiple_obstacles", testMultipleObstacles},
     {"obstacle_near_edge", testObstacleNearEdge},
     {"narrow_gap", testNarrowGap},
@@ -943,7 +1288,10 @@ const vector<TestCase> TEST_CASES{
     {"small_field", testSmallField},
     {"vertex_edge_touch", testVertexAndEdgeTouch},
     {"waypoint_containment", testWaypointContainment},
-    {"route_statistics", testRouteStatistics}
+    {"route_statistics", testRouteStatistics},
+    {"battery_feasible", testFeasibleBatteryMission},
+    {"battery_split", testBatteryMissionSplitting},
+    {"battery_infeasible", testInfeasibleBatteryMission}
 };
 
 } // namespace

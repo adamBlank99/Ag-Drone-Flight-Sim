@@ -94,6 +94,12 @@ RouteOptimizationResult optimizeRoute(
             waypoint = rotatePoint(waypoint, center, angle);
         }
 
+        if (!isMissionRouteSafe(mission, field, safetyBoundaries)) {
+            throw logic_error(
+                "Optimized route failed safety validation after rotation"
+            );
+        }
+
         RouteStatistics statistics =
             calculateRouteStatistics(mission, drone.speed);
         double score = calculateRouteScore(statistics, turnPenalty);

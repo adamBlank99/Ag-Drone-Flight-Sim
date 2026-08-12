@@ -72,3 +72,36 @@ Obstacle-aware planning clips passes around barns, ponds, tree clusters, and
 restricted zones. The sample mission includes all four obstacle types.
 `obstacles.csv` stores original obstacle polygons and conservative safety
 boundaries. Detour waypoints are identified in `waypoints.csv`.
+
+Every complete segment between consecutive route waypoints is validated against
+the field boundary and every obstacle safety boundary. Blocked transitions use
+a visibility graph made from field and safety-boundary vertices, then Dijkstra's
+algorithm selects the shortest collision-free path. Angle candidates are scored
+only after these detour points and their added distance have been included.
+
+## Battery and mission model
+
+The selected obstacle-safe route is evaluated with a battery capacity, modeled
+under-load flight time, reserve percentage, time per heading change, and fixed
+takeoff/landing time. Each estimate includes a safe path from home to the first
+coverage pass and a safe return home.
+
+Modeled mission time is:
+
+```text
+distance / speed + heading changes x turn time + takeoff/landing time
+```
+
+Energy use is derived from that time as a fraction of the configured battery
+capacity and under-load flight time. A mission is safe only when the projected
+remaining charge is at least the configured reserve.
+
+If the optimized route exceeds one battery, it is split at completed coverage
+pass boundaries. The splitter places as many whole passes as possible in each
+reserve-safe mission and includes separate home transits for every battery.
+If even one pass cannot fit, the plan is explicitly reported as infeasible.
+
+`waypoints.csv` includes mission number, mission safety, duration, distance,
+and battery percentages. The Python visualizer uses separate colors for
+multiple missions, marks home-transit points, and hides camera coverage during
+those transits.

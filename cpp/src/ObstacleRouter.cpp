@@ -2,8 +2,11 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <limits>
+#include <queue>
 #include <stdexcept>
+#include <utility>
 
 using namespace std;
 
@@ -39,22 +42,21 @@ bool pointIsUsable(
     return true;
 }
 
-bool segmentIsSafe(
-    const LineSegment& segment,
+void validateRoutingPolygons(
     const Polygon& field,
     const vector<Polygon>& exclusionZones
 ) {
-    if (!segmentStaysInsidePolygon(segment, field)) {
-        return false;
+    if (field.vertices.size() < 3) {
+        throw invalid_argument("A route field needs at least three vertices");
     }
 
     for (const Polygon& exclusion : exclusionZones) {
-        if (segmentIntersectsPolygonInterior(segment, exclusion)) {
-            return false;
+        if (exclusion.vertices.size() < 3) {
+            throw invalid_argument(
+                "A route exclusion zone needs at least three vertices"
+            );
         }
     }
-
-    return true;
 }
 
 void appendUniquePoint(vector<Point>& points, const Point& candidate) {
@@ -67,17 +69,144 @@ void appendUniquePoint(vector<Point>& points, const Point& candidate) {
     points.push_back(candidate);
 }
 
-vector<Point> findSafeTransition(
+vector<vector<pair<size_t, double>>> buildVisibilityGraph(
+    const vector<Point>& nodes,
+    const Polygon& field,
+    const vector<Polygon>& exclusionZones
+) {
+    vector<vector<pair<size_t, double>>> graph(nodes.size());
+
+    for (size_t first = 0; first < nodes.size(); ++first) {
+        for (size_t second = first + 1; second < nodes.size(); ++second) {
+            if (!isRouteSegmentSafe(
+                {nodes[first], nodes[second]},
+                field,
+                exclusionZones
+            )) {
+                continue;
+            }
+
+            double distance = pointDistance(nodes[first], nodes[second]);
+            graph[first].push_back({second, distance});
+            graph[second].push_back({first, distance});
+        }
+    }
+
+    return graph;
+}
+
+vector<Point> runDijkstra(
+    const vector<Point>& nodes,
+    const vector<vector<pair<size_t, double>>>& graph
+) {
+    const double infinity = numeric_limits<double>::infinity();
+    vector<double> distances(nodes.size(), infinity);
+    vector<size_t> previous(nodes.size(), nodes.size());
+    priority_queue<
+        pair<double, size_t>,
+        vector<pair<double, size_t>>,
+        greater<pair<double, size_t>>
+    > frontier;
+
+    distances[0] = 0.0;
+    frontier.push({0.0, 0});
+
+    while (!frontier.empty()) {
+        auto [distanceToCurrent, current] = frontier.top();
+        frontier.pop();
+
+        if (distanceToCurrent > distances[current] + EPSILON) {
+            continue;
+        }
+
+        if (current == 1) {
+            break;
+        }
+
+        for (const auto& [next, edgeLength] : graph[current]) {
+            double candidateDistance = distanceToCurrent + edgeLength;
+
+            if (candidateDistance + EPSILON >= distances[next]) {
+                continue;
+            }
+
+            distances[next] = candidateDistance;
+            previous[next] = current;
+            frontier.push({candidateDistance, next});
+        }
+    }
+
+    if (!isfinite(distances[1])) {
+        throw runtime_error("No collision-free transition route was found");
+    }
+
+    vector<Point> reversedPath;
+
+    for (size_t current = 1; ; current = previous[current]) {
+        reversedPath.push_back(nodes[current]);
+
+        if (current == 0) {
+            break;
+        }
+
+        if (previous[current] == nodes.size()) {
+            throw logic_error("Shortest-path reconstruction failed");
+        }
+    }
+
+    reverse(reversedPath.begin(), reversedPath.end());
+    return reversedPath;
+}
+
+} // namespace
+
+bool isRouteSegmentSafe(
+    const LineSegment& segment,
+    const Polygon& field,
+    const vector<Polygon>& exclusionZones
+) {
+    if (field.vertices.size() < 3) {
+        return false;
+    }
+
+    if (!segmentStaysInsidePolygon(segment, field)) {
+        return false;
+    }
+
+    for (const Polygon& exclusion : exclusionZones) {
+        if (
+            exclusion.vertices.size() < 3 ||
+            segmentIntersectsPolygonInterior(segment, exclusion)
+        ) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+vector<Point> findShortestSafePath(
     const Point& start,
     const Point& end,
     const Polygon& field,
     const vector<Polygon>& exclusionZones
 ) {
+    validateRoutingPolygons(field, exclusionZones);
+
+    if (
+        !pointIsUsable(start, field, exclusionZones) ||
+        !pointIsUsable(end, field, exclusionZones)
+    ) {
+        throw invalid_argument(
+            "Transition endpoints must be inside the field and outside exclusions"
+        );
+    }
+
     if (samePoint(start, end)) {
         return {start};
     }
 
-    if (segmentIsSafe({start, end}, field, exclusionZones)) {
+    if (isRouteSegmentSafe({start, end}, field, exclusionZones)) {
         return {start, end};
     }
 
@@ -97,82 +226,18 @@ vector<Point> findSafeTransition(
         }
     }
 
-    const double infinity = numeric_limits<double>::infinity();
-    vector<double> distances(nodes.size(), infinity);
-    vector<size_t> previous(nodes.size(), nodes.size());
-    vector<bool> visited(nodes.size(), false);
-    distances[0] = 0.0;
-
-    for (size_t iteration = 0; iteration < nodes.size(); ++iteration) {
-        size_t current = nodes.size();
-
-        for (size_t i = 0; i < nodes.size(); ++i) {
-            if (
-                !visited[i] &&
-                (current == nodes.size() || distances[i] < distances[current])
-            ) {
-                current = i;
-            }
-        }
-
-        if (current == nodes.size() || distances[current] == infinity) {
-            break;
-        }
-
-        if (current == 1) {
-            break;
-        }
-
-        visited[current] = true;
-
-        for (size_t next = 0; next < nodes.size(); ++next) {
-            if (visited[next] || current == next) {
-                continue;
-            }
-
-            if (!segmentIsSafe(
-                {nodes[current], nodes[next]},
-                field,
-                exclusionZones
-            )) {
-                continue;
-            }
-
-            double candidateDistance =
-                distances[current] + pointDistance(nodes[current], nodes[next]);
-
-            if (candidateDistance < distances[next]) {
-                distances[next] = candidateDistance;
-                previous[next] = current;
-            }
-        }
-    }
-
-    if (distances[1] == infinity) {
-        throw runtime_error("No collision-free transition route was found");
-    }
-
-    vector<Point> reversedPath;
-
-    for (size_t current = 1; current != nodes.size(); current = previous[current]) {
-        reversedPath.push_back(nodes[current]);
-
-        if (current == 0) {
-            break;
-        }
-    }
-
-    reverse(reversedPath.begin(), reversedPath.end());
-    return reversedPath;
+    return runDijkstra(
+        nodes,
+        buildVisibilityGraph(nodes, field, exclusionZones)
+    );
 }
-
-} // namespace
 
 MissionRoute buildSafeMissionRoute(
     const Polygon& field,
     const vector<LineSegment>& coverageSegments,
     const vector<Polygon>& exclusionZones
 ) {
+    validateRoutingPolygons(field, exclusionZones);
     MissionRoute route{{}, {}, coverageSegments.size(), 0};
 
     for (size_t i = 0; i < coverageSegments.size(); ++i) {
@@ -181,8 +246,18 @@ MissionRoute buildSafeMissionRoute(
         Point passEnd =
             i % 2 == 0 ? coverageSegments[i].end : coverageSegments[i].start;
 
+        if (!isRouteSegmentSafe(
+            {passStart, passEnd},
+            field,
+            exclusionZones
+        )) {
+            throw invalid_argument(
+                "Coverage segment crosses a field boundary or exclusion zone"
+            );
+        }
+
         if (!route.waypoints.empty()) {
-            vector<Point> transition = findSafeTransition(
+            vector<Point> transition = findShortestSafePath(
                 route.waypoints.back(),
                 passStart,
                 field,
@@ -205,13 +280,66 @@ MissionRoute buildSafeMissionRoute(
         route.waypointTypes.push_back(WaypointType::CoverageEnd);
     }
 
+    if (!isMissionRouteSafe(route, field, exclusionZones)) {
+        throw logic_error("Generated mission route failed final safety validation");
+    }
+
     return route;
+}
+
+bool isMissionRouteSafe(
+    const MissionRoute& route,
+    const Polygon& field,
+    const vector<Polygon>& exclusionZones
+) {
+    if (
+        field.vertices.size() < 3 ||
+        route.waypoints.size() != route.waypointTypes.size()
+    ) {
+        return false;
+    }
+
+    for (const Polygon& exclusion : exclusionZones) {
+        if (exclusion.vertices.size() < 3) {
+            return false;
+        }
+    }
+
+    for (const Point& waypoint : route.waypoints) {
+        if (!pointIsUsable(waypoint, field, exclusionZones)) {
+            return false;
+        }
+    }
+
+    for (size_t i = 1; i < route.waypoints.size(); ++i) {
+        if (!isRouteSegmentSafe(
+            {route.waypoints[i - 1], route.waypoints[i]},
+            field,
+            exclusionZones
+        )) {
+            return false;
+        }
+    }
+
+    return true;
 }
 
 bool routeAvoidsExclusionZones(
     const MissionRoute& route,
     const vector<Polygon>& exclusionZones
 ) {
+    for (const Polygon& exclusion : exclusionZones) {
+        if (exclusion.vertices.size() < 3) {
+            return false;
+        }
+
+        for (const Point& waypoint : route.waypoints) {
+            if (pointInPolygon(waypoint, exclusion) == PointLocation::Inside) {
+                return false;
+            }
+        }
+    }
+
     for (size_t i = 1; i < route.waypoints.size(); ++i) {
         LineSegment routeSegment{
             route.waypoints[i - 1],
