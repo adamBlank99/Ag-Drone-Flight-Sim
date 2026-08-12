@@ -7,6 +7,8 @@
 #include "CameraConfig.h"
 #include "DroneConfig.h"
 #include "Geometry.h"
+#include "MissionModel.h"
+#include "MissionRoute.h"
 #include "Obstacle.h"
 #include "Polygon.h"
 #include "RouteOptimizer.h"
@@ -36,7 +38,14 @@ int main() {
             0.30,
             0.70
         },
-        6.0
+        6.0,
+        {
+            220.0,  // watt-hours
+            900.0,  // 15 minutes under expected flight load
+            0.20,   // land with at least 20% remaining
+            1.5,    // additional seconds per heading change
+            45.0    // combined takeoff and landing time
+        }
     };
 
     Polygon irregularField{{
@@ -98,7 +107,27 @@ int main() {
         10.0
     );
     const RouteCandidate& bestRoute = optimization.bestRoute;
-    const vector<Point>& path = bestRoute.waypoints;
+    vector<Polygon> safetyBoundaries;
+
+    for (const Obstacle& obstacle : obstacles) {
+        safetyBoundaries.push_back(calculateSafetyBoundary(obstacle));
+    }
+
+    MissionRoute optimizedMission{
+        bestRoute.waypoints,
+        bestRoute.waypointTypes,
+        bestRoute.statistics.coveragePasses,
+        bestRoute.statistics.transitionSegments
+    };
+    Point home = irregularField.vertices.front();
+    BatteryMissionPlan batteryPlan = planBatteryMissions(
+        optimizedMission,
+        home,
+        irregularField,
+        safetyBoundaries,
+        drone.speed,
+        drone.battery
+    );
 
     ofstream waypointFile("waypoints.csv");
     ofstream polygonFile("field_polygon.csv");
@@ -111,7 +140,12 @@ int main() {
     }
 
     waypointFile
-        << "angle_degrees,score,total_distance,turns,waypoint_type,x,y\n";
+        << "angle_degrees,score,total_distance,turns,"
+        << "mission_id,mission_count,mission_safe,all_missions_safe,"
+        << "first_coverage_pass,coverage_passes,"
+        << "mission_distance,mission_duration_seconds,energy_used_wh,"
+        << "battery_used_percent,battery_remaining_percent,"
+        << "waypoint_type,x,y\n";
     polygonFile << "x,y\n";
     footprintFile << "width,height\n";
     obstacleFile
@@ -154,15 +188,30 @@ int main() {
         separateSegment
     );
 
-    for (size_t i = 0; i < path.size(); ++i) {
-        waypointFile << setprecision(15)
-                     << bestRoute.angleDegrees << ","
-                     << bestRoute.score << ","
-                     << routeStatistics.totalDistance << ","
-                     << routeStatistics.transitionSegments << ","
-                     << waypointTypeName(bestRoute.waypointTypes[i]) << ","
-                     << path[i].x << ","
-                     << path[i].y << "\n";
+    for (const BatteryMission& mission : batteryPlan.missions) {
+        for (size_t i = 0; i < mission.waypoints.size(); ++i) {
+            waypointFile << setprecision(15)
+                         << bestRoute.angleDegrees << ","
+                         << bestRoute.score << ","
+                         << routeStatistics.totalDistance << ","
+                         << routeStatistics.transitionSegments << ","
+                         << mission.missionNumber << ","
+                         << batteryPlan.missions.size() << ","
+                         << (mission.battery.safeWithReserve ? "true" : "false")
+                         << ","
+                         << (batteryPlan.allMissionsFeasible ? "true" : "false")
+                         << ","
+                         << mission.firstCoveragePass << ","
+                         << mission.coveragePasses << ","
+                         << mission.battery.distance << ","
+                         << mission.battery.totalTimeSeconds << ","
+                         << mission.battery.energyUsedWh << ","
+                         << mission.battery.batteryUsedPercent << ","
+                         << mission.battery.batteryRemainingPercent << ","
+                         << waypointTypeName(mission.waypointTypes[i]) << ","
+                         << mission.waypoints[i].x << ","
+                         << mission.waypoints[i].y << "\n";
+        }
     }
 
     for (const Point& vertex : irregularField.vertices) {
@@ -171,8 +220,11 @@ int main() {
             << vertex.y << "\n";
     }
 
-    for (const Obstacle& obstacle : obstacles) {
-        Polygon safetyBoundary = calculateSafetyBoundary(obstacle);
+    for (size_t obstacleIndex = 0;
+         obstacleIndex < obstacles.size();
+         ++obstacleIndex) {
+        const Obstacle& obstacle = obstacles[obstacleIndex];
+        const Polygon& safetyBoundary = safetyBoundaries[obstacleIndex];
 
         for (size_t i = 0; i < obstacle.boundary.vertices.size(); ++i) {
             const Point& vertex = obstacle.boundary.vertices[i];
@@ -286,6 +338,53 @@ int main() {
     cout << fixed << setprecision(1);
     cout << "Estimated flight time: "
          << routeStatistics.estimatedFlightTime << " seconds\n";
+
+    cout << "\nBattery and mission model:\n";
+    cout << "Capacity: " << drone.battery.capacityWh << " Wh\n";
+    cout << "Modeled full-battery flight time: "
+         << drone.battery.usableFlightTimeSeconds / 60.0
+         << " minutes\n";
+    cout << "Reserve margin: "
+         << drone.battery.reserveFraction * 100.0 << "%\n";
+    cout << "Safe time per battery: "
+         << batteryPlan.safeFlightTimeSeconds / 60.0
+         << " minutes\n";
+    cout << "Turn allowance: "
+         << drone.battery.secondsPerTurn << " seconds per turn\n";
+    cout << "Takeoff/landing allowance: "
+         << drone.battery.takeoffLandingTimeSeconds << " seconds\n";
+    cout << "Home: (" << batteryPlan.home.x << ", "
+         << batteryPlan.home.y << ")\n";
+    cout << "Single-battery estimate: "
+         << batteryPlan.singleMissionEstimate.totalTimeSeconds
+         << " seconds, "
+         << batteryPlan.singleMissionEstimate.batteryUsedPercent
+         << "% battery\n";
+    cout << "Safe on one battery: "
+         << (batteryPlan.singleMissionFeasible ? "yes" : "no") << "\n";
+    cout << "Planned missions: " << batteryPlan.missions.size() << "\n";
+
+    for (const BatteryMission& mission : batteryPlan.missions) {
+        cout << "Mission " << mission.missionNumber << ": "
+             << mission.coveragePasses << " passes, "
+             << mission.battery.distance << " m, "
+             << mission.battery.turnCount << " turns, "
+             << mission.battery.totalTimeSeconds << " seconds, "
+             << mission.battery.energyUsedWh << " Wh, "
+             << mission.battery.batteryUsedPercent << "% battery, "
+             << mission.battery.batteryRemainingPercent << "% remaining, "
+             << (mission.battery.safeWithReserve ? "safe" : "unsafe")
+             << "\n";
+    }
+
+    cout << "All missions feasible: "
+         << (batteryPlan.allMissionsFeasible ? "yes" : "no") << "\n";
+    cout << "Campaign distance: "
+         << batteryPlan.totalCampaignDistance << " m\n";
+    cout << "Campaign flight time: "
+         << batteryPlan.totalCampaignTimeSeconds << " seconds\n";
+    cout << "Campaign energy across fresh batteries: "
+         << batteryPlan.totalEnergyUsedWh << " Wh\n";
 
     return 0;
 }

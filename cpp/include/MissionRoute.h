@@ -8,7 +8,8 @@
 enum class WaypointType {
     CoverageStart,
     CoverageEnd,
-    Detour
+    Detour,
+    Transit
 };
 
 struct MissionRoute {

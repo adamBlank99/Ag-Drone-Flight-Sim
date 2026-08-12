@@ -10,6 +10,8 @@ set(DRONE_TEST_CASES
     candidate_routes
     best_angle
     obstacle_intersections
+    full_route_segment_safety
+    shortest_obstacle_detour
     multiple_obstacles
     obstacle_near_edge
     narrow_gap
@@ -26,6 +28,9 @@ set(DRONE_TEST_CASES
     vertex_edge_touch
     waypoint_containment
     route_statistics
+    battery_feasible
+    battery_split
+    battery_infeasible
 )
 
 foreach(test_case IN LISTS DRONE_TEST_CASES)
