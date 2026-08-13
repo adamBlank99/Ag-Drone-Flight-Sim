@@ -17,6 +17,8 @@ WAYPOINT_FILE = PROJECT_ROOT / "waypoints.csv"
 POLYGON_FILE = PROJECT_ROOT / "field_polygon.csv"
 FOOTPRINT_FILE = PROJECT_ROOT / "camera_footprint.csv"
 OBSTACLE_FILE = PROJECT_ROOT / "obstacles.csv"
+COVERAGE_STATISTICS_FILE = PROJECT_ROOT / "coverage_statistics.csv"
+COVERAGE_GRID_FILE = PROJECT_ROOT / "coverage_grid.csv"
 
 
 def read_points(file_path):
@@ -103,6 +105,39 @@ def read_obstacles(file_path):
     return list(grouped.values())
 
 
+def read_coverage_quality(statistics_path, grid_path):
+    if not statistics_path.exists() or not grid_path.exists():
+        raise SystemExit(
+            "Run ./build/drone_survey first to generate coverage analysis data"
+        )
+
+    with statistics_path.open(newline="") as file:
+        row = next(csv.DictReader(file), None)
+
+    if row is None:
+        raise SystemExit(f"No coverage statistics found in {statistics_path.name}")
+
+    statistics = {
+        name: float(value)
+        for name, value in row.items()
+    }
+    cells = []
+
+    with grid_path.open(newline="") as file:
+        for cell in csv.DictReader(file):
+            cells.append(
+                {
+                    "x": float(cell["x"]),
+                    "y": float(cell["y"]),
+                    "size": float(cell["cell_size"]),
+                    "count": int(cell["coverage_count"]),
+                    "status": cell["status"],
+                }
+            )
+
+    return statistics, cells
+
+
 parser = argparse.ArgumentParser(
     description="Visualize and interact with the generated drone route."
 )
@@ -132,6 +167,10 @@ arguments = parser.parse_args()
 ) = read_optimized_route(WAYPOINT_FILE)
 polygon_vertices = read_points(POLYGON_FILE)
 obstacles = read_obstacles(OBSTACLE_FILE)
+coverage_statistics, coverage_cells = read_coverage_quality(
+    COVERAGE_STATISTICS_FILE,
+    COVERAGE_GRID_FILE,
+)
 
 
 figure, axes = plt.subplots(figsize=(12, 7.5))
@@ -139,12 +178,50 @@ figure, axes = plt.subplots(figsize=(12, 7.5))
 field = Polygon(
     polygon_vertices,
     closed=True,
-    facecolor="lightgreen",
+    facecolor="#f4f4ef",
     edgecolor="darkgreen",
     linewidth=2,
+    zorder=0,
 )
 
 axes.add_patch(field)
+
+coverage_styles = {
+    "covered": ("cornflowerblue", 0.42, "Covered once"),
+    "missed": ("crimson", 0.85, "Missed"),
+    "overlap": ("mediumpurple", 0.62, "Covered multiple times"),
+}
+
+for status, (color, alpha, label) in coverage_styles.items():
+    cell_polygons = []
+
+    for cell in coverage_cells:
+        if cell["status"] != status:
+            continue
+
+        half_size = cell["size"] / 2.0
+        cell_polygons.append(
+            [
+                (cell["x"] - half_size, cell["y"] - half_size),
+                (cell["x"] + half_size, cell["y"] - half_size),
+                (cell["x"] + half_size, cell["y"] + half_size),
+                (cell["x"] - half_size, cell["y"] + half_size),
+            ]
+        )
+
+    if not cell_polygons:
+        continue
+
+    quality_layer = PolyCollection(
+        cell_polygons,
+        facecolors=color,
+        edgecolors="none",
+        alpha=alpha,
+        label=label,
+        zorder=1,
+    )
+    quality_layer.set_clip_path(field)
+    axes.add_collection(quality_layer)
 
 obstacle_colors = {
     "barn": "saddlebrown",
@@ -165,6 +242,7 @@ for obstacle in obstacles:
             linestyle="--",
             linewidth=1.5,
             label="Safety clearance" if not safety_label_added else None,
+            zorder=7,
         )
         axes.add_patch(safety_boundary)
         safety_label_added = True
@@ -179,6 +257,7 @@ for obstacle in obstacles:
         alpha=0.75,
         linewidth=1.5,
         label=obstacle_type.title() if obstacle_type not in shown_types else None,
+        zorder=8,
     )
     axes.add_patch(obstacle_patch)
     shown_types.add(obstacle_type)
@@ -196,9 +275,25 @@ axes.set_title(
     f"Agricultural Drone Coverage Route — "
     f"Selected angle: {route_metadata['angle']:g}° — "
     f"{route_metadata['mission_count']} mission"
-    f"{'s' if route_metadata['mission_count'] != 1 else ''}"
+    f"{'s' if route_metadata['mission_count'] != 1 else ''} — "
+    f"{coverage_statistics['coverage_percent']:.1f}% covered"
 )
 axes.grid(True)
+axes.text(
+    0.99,
+    0.01,
+    (
+        f"Required: {coverage_statistics['required_area']:.0f} m²\n"
+        f"Covered: {coverage_statistics['covered_area']:.0f} m²\n"
+        f"Missed: {coverage_statistics['missed_area']:.0f} m²\n"
+        f"Overlap: {coverage_statistics['overlap_area']:.0f} m²"
+    ),
+    transform=axes.transAxes,
+    horizontalalignment="right",
+    verticalalignment="bottom",
+    bbox={"facecolor": "white", "alpha": 0.82, "edgecolor": "gray"},
+    zorder=20,
+)
 
 x_values = [point[0] for point in waypoints]
 y_values = [point[1] for point in waypoints]
@@ -215,6 +310,7 @@ route_line, = axes.plot(
         else "All mission waypoints"
     ),
     picker=7,
+    zorder=10,
 )
 
 if route_metadata["mission_count"] > 1:
@@ -241,7 +337,7 @@ if route_metadata["mission_count"] > 1:
                 f"{battery_used[indices[0]]:.1f}% battery"
                 f"{'' if mission_safe[indices[0]] else ' (unsafe)'}"
             ),
-            zorder=4,
+            zorder=11,
         )
 
 detour_points = [
@@ -258,7 +354,7 @@ if detour_points:
         marker="D",
         s=45,
         label="Detour waypoint",
-        zorder=5,
+        zorder=12,
     )
 
 transit_points = [
@@ -275,7 +371,7 @@ if transit_points:
         marker="s",
         s=35,
         label="Home transit",
-        zorder=5,
+        zorder=12,
     )
 
 footprint_width, footprint_height = read_points(FOOTPRINT_FILE)[0]
@@ -317,7 +413,7 @@ drone_marker, = axes.plot(
     markersize=11,
     linestyle="None",
     label="Drone",
-    zorder=8,
+    zorder=15,
 )
 
 completed_route, = axes.plot(
@@ -325,7 +421,7 @@ completed_route, = axes.plot(
     [first_y],
     color="orange",
     linewidth=3,
-    zorder=4,
+    zorder=13,
 )
 
 selected_waypoint, = axes.plot(
@@ -337,20 +433,8 @@ selected_waypoint, = axes.plot(
     markeredgecolor="black",
     markeredgewidth=2,
     linestyle="None",
-    zorder=9,
+    zorder=16,
 )
-
-for number, ((x, y), waypoint_type) in enumerate(
-    zip(waypoints, waypoint_types),
-    start=1,
-):
-    if waypoint_type == "detour":
-        axes.annotate(
-            f"D{number}",
-            (x, y),
-            xytext=(5, 5),
-            textcoords="offset points",
-        )
 
 current_waypoint = 0
 furthest_waypoint = 0

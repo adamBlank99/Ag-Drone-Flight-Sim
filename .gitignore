@@ -5,6 +5,8 @@
 /waypoints.csv
 /field_polygon.csv
 /camera_footprint.csv
+/coverage_grid.csv
+/coverage_statistics.csv
 /obstacles.csv
 
 # Compiled artifacts

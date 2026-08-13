@@ -31,6 +31,12 @@ set(DRONE_TEST_CASES
     battery_feasible
     battery_split
     battery_infeasible
+    coverage_full
+    coverage_gap
+    coverage_overlap
+    coverage_irregular
+    coverage_obstacle
+    coverage_multi_mission
 )
 
 foreach(test_case IN LISTS DRONE_TEST_CASES)

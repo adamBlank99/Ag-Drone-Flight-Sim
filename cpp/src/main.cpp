@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "CameraConfig.h"
+#include "CoverageAnalysis.h"
 #include "DroneConfig.h"
 #include "Geometry.h"
 #include "MissionModel.h"
@@ -15,19 +16,6 @@
 #include "RouteStatistics.h"
 
 using namespace std;
-
-const char* pointLocationName(PointLocation location) {
-    switch (location) {
-        case PointLocation::Inside:
-            return "inside";
-        case PointLocation::Outside:
-            return "outside";
-        case PointLocation::Boundary:
-            return "boundary";
-    }
-
-    return "unknown";
-}
 
 int main() {
     DroneConfig drone{
@@ -128,13 +116,51 @@ int main() {
         drone.speed,
         drone.battery
     );
+    CameraFootprint footprint = calculateFootprint(drone.camera);
+    double laneSpacing = calculateLaneSpacing(
+        footprint,
+        drone.camera.sideOverlap
+    );
+    double photoSpacing = calculatePhotoSpacing(
+        footprint,
+        drone.camera.forwardOverlap
+    );
+    double photoCaptureInterval = photoSpacing / drone.speed;
+    vector<MissionRoute> flightMissions;
+
+    for (const BatteryMission& mission : batteryPlan.missions) {
+        flightMissions.push_back({
+            mission.waypoints,
+            mission.waypointTypes,
+            mission.coveragePasses,
+            0
+        });
+    }
+
+    CoverageAnalysis coverage = analyzeCoverage(
+        flightMissions,
+        irregularField,
+        safetyBoundaries,
+        footprint,
+        1.0
+    );
+    const CoverageStatistics& coverageStatistics = coverage.statistics;
 
     ofstream waypointFile("waypoints.csv");
     ofstream polygonFile("field_polygon.csv");
     ofstream footprintFile("camera_footprint.csv");
     ofstream obstacleFile("obstacles.csv");
+    ofstream coverageStatisticsFile("coverage_statistics.csv");
+    ofstream coverageGridFile("coverage_grid.csv");
 
-    if (!waypointFile || !polygonFile || !footprintFile || !obstacleFile) {
+    if (
+        !waypointFile ||
+        !polygonFile ||
+        !footprintFile ||
+        !obstacleFile ||
+        !coverageStatisticsFile ||
+        !coverageGridFile
+    ) {
         cerr << "Could not create visualization data files\n";
         return 1;
     }
@@ -150,43 +176,48 @@ int main() {
     footprintFile << "width,height\n";
     obstacleFile
         << "name,type,clearance,boundary,vertex_index,x,y\n";
-
-    CameraFootprint footprint = calculateFootprint(drone.camera);
-    double laneSpacing = calculateLaneSpacing(
-        footprint,
-        drone.camera.sideOverlap
-    );
-    double photoSpacing = calculatePhotoSpacing(
-        footprint,
-        drone.camera.forwardOverlap
-    );
-    double photoCaptureInterval = photoSpacing / drone.speed;
+    coverageStatisticsFile
+        << "total_field_area,excluded_area,required_area,covered_area,"
+        << "missed_area,overlap_area,redundant_coverage_area,"
+        << "total_camera_exposure_area,coverage_percent,overlap_percent,"
+        << "coverage_efficiency_percent,survey_distance,"
+        << "covered_area_per_survey_meter,survey_segments,cell_size\n";
+    coverageGridFile << "x,y,cell_size,coverage_count,status\n";
 
     footprintFile << setprecision(15)
                   << footprint.width << ","
                   << footprint.height << "\n";
 
     const RouteStatistics& routeStatistics = bestRoute.statistics;
-    double irregularFieldArea = calculatePolygonArea(irregularField);
     BoundingBox boundingBox = calculateBoundingBox(irregularField);
 
-    Point insidePoint{50.0, 40.0};
-    Point outsidePoint{130.0, 40.0};
-    Point boundaryPoint{60.0, 0.0};
+    coverageStatisticsFile
+        << setprecision(15)
+        << coverageStatistics.totalFieldArea << ","
+        << coverageStatistics.excludedArea << ","
+        << coverageStatistics.requiredArea << ","
+        << coverageStatistics.coveredArea << ","
+        << coverageStatistics.missedArea << ","
+        << coverageStatistics.overlapArea << ","
+        << coverageStatistics.redundantCoverageArea << ","
+        << coverageStatistics.totalCameraExposureArea << ","
+        << coverageStatistics.coveragePercent << ","
+        << coverageStatistics.overlapPercent << ","
+        << coverageStatistics.coverageEfficiencyPercent << ","
+        << coverageStatistics.surveyDistance << ","
+        << coverageStatistics.coveredAreaPerSurveyMeter << ","
+        << coverageStatistics.surveySegments << ","
+        << coverageStatistics.cellSize << "\n";
 
-    LineSegment horizontalSegment{{0.0, 30.0}, {100.0, 30.0}};
-    LineSegment verticalSegment{{50.0, 0.0}, {50.0, 60.0}};
-    LineSegment separateSegment{{0.0, 70.0}, {100.0, 70.0}};
-
-    auto crossingIntersection = calculateLineSegmentIntersection(
-        horizontalSegment,
-        verticalSegment
-    );
-
-    auto separateIntersection = calculateLineSegmentIntersection(
-        horizontalSegment,
-        separateSegment
-    );
+    for (const CoverageCell& cell : coverage.cells) {
+        coverageGridFile
+            << setprecision(15)
+            << cell.center.x << ","
+            << cell.center.y << ","
+            << cell.size << ","
+            << cell.coverageCount << ","
+            << coverageCellStatusName(cell.status) << "\n";
+    }
 
     for (const BatteryMission& mission : batteryPlan.missions) {
         for (size_t i = 0; i < mission.waypoints.size(); ++i) {
@@ -250,7 +281,8 @@ int main() {
     cout << "Field:\n";
     cout << "Type: irregular polygon\n";
     cout << "Vertices: " << irregularField.vertices.size() << "\n";
-    cout << "Area: " << irregularFieldArea << " square meters\n";
+    cout << "Area: " << coverageStatistics.totalFieldArea
+         << " square meters\n";
     cout << "Bounding box:\n";
     cout << "minX: " << boundingBox.minX << " m\n";
     cout << "maxX: " << boundingBox.maxX << " m\n";
@@ -263,29 +295,6 @@ int main() {
              << ", clearance " << obstacle.clearance << " m\n";
     }
     cout << "\n";
-
-    cout << "Point-in-polygon tests:\n";
-    cout << "Inside point (50, 40): "
-         << pointLocationName(pointInPolygon(insidePoint, irregularField))
-         << "\n";
-    cout << "Outside point (130, 40): "
-         << pointLocationName(pointInPolygon(outsidePoint, irregularField))
-         << "\n";
-    cout << "Boundary point (60, 0): "
-         << pointLocationName(pointInPolygon(boundaryPoint, irregularField))
-         << "\n\n";
-
-    cout << "Line-segment intersection tests:\n";
-
-    if (crossingIntersection) {
-        cout << "Crossing segments: intersection at ("
-             << crossingIntersection->x << ", "
-             << crossingIntersection->y << ")\n";
-    }
-
-    cout << "Separate segments: "
-         << (separateIntersection ? "intersection" : "no intersection")
-         << "\n\n";
 
     cout << "Route optimization:\n";
     cout << "Score = distance + " << optimization.turnPenalty
@@ -385,6 +394,33 @@ int main() {
          << batteryPlan.totalCampaignTimeSeconds << " seconds\n";
     cout << "Campaign energy across fresh batteries: "
          << batteryPlan.totalEnergyUsedWh << " Wh\n";
+
+    cout << "\nCoverage quality ("
+         << coverageStatistics.cellSize << " m grid):\n";
+    cout << "Total field area: "
+         << coverageStatistics.totalFieldArea << " m^2\n";
+    cout << "Excluded obstacle/no-fly area: "
+         << coverageStatistics.excludedArea << " m^2\n";
+    cout << "Required survey area: "
+         << coverageStatistics.requiredArea << " m^2\n";
+    cout << "Covered area: "
+         << coverageStatistics.coveredArea << " m^2\n";
+    cout << "Missed area: "
+         << coverageStatistics.missedArea << " m^2\n";
+    cout << "Overlapping area: "
+         << coverageStatistics.overlapArea << " m^2\n";
+    cout << "Redundant coverage: "
+         << coverageStatistics.redundantCoverageArea << " m^2\n";
+    cout << "Coverage: "
+         << coverageStatistics.coveragePercent << "%\n";
+    cout << "Overlap: "
+         << coverageStatistics.overlapPercent << "%\n";
+    cout << "Unique coverage efficiency: "
+         << coverageStatistics.coverageEfficiencyPercent << "%\n";
+    cout << "Survey-only distance: "
+         << coverageStatistics.surveyDistance << " m\n";
+    cout << "Covered area per survey meter: "
+         << coverageStatistics.coveredAreaPerSurveyMeter << " m^2/m\n";
 
     return 0;
 }

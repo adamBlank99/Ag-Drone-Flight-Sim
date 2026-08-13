@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "CameraConfig.h"
+#include "CoverageAnalysis.h"
 #include "CoveragePlanner.h"
 #include "DroneConfig.h"
 #include "Geometry.h"
@@ -1259,6 +1260,200 @@ void testInfeasibleBatteryMission() {
     );
 }
 
+Polygon coverageTestField() {
+    return {{
+        {0.0, 0.0},
+        {10.0, 0.0},
+        {10.0, 10.0},
+        {0.0, 10.0}
+    }};
+}
+
+MissionRoute coverageRoute(const vector<LineSegment>& segments) {
+    MissionRoute route{{}, {}, segments.size(), 0};
+
+    for (const LineSegment& segment : segments) {
+        route.waypoints.push_back(segment.start);
+        route.waypointTypes.push_back(WaypointType::CoverageStart);
+        route.waypoints.push_back(segment.end);
+        route.waypointTypes.push_back(WaypointType::CoverageEnd);
+    }
+
+    return route;
+}
+
+void testFullCoverageAnalysis() {
+    CoverageAnalysis analysis = analyzeCoverage(
+        {coverageRoute({{{0.0, 5.0}, {10.0, 5.0}}})},
+        coverageTestField(),
+        {},
+        {10.0, 2.0},
+        1.0
+    );
+    const CoverageStatistics& statistics = analysis.statistics;
+
+    requireNear(statistics.totalFieldArea, 100.0, "Full coverage field area");
+    requireNear(statistics.requiredArea, 100.0, "Full required area");
+    requireNear(statistics.coveredArea, 100.0, "Fully covered area");
+    requireNear(statistics.missedArea, 0.0, "Full coverage missed area");
+    requireNear(statistics.coveragePercent, 100.0, "Full coverage percentage");
+    require(statistics.surveySegments == 1, "Full coverage segment count");
+}
+
+void testCoverageGapAnalysis() {
+    CoverageAnalysis analysis = analyzeCoverage(
+        {coverageRoute({{{0.0, 2.0}, {10.0, 2.0}}})},
+        coverageTestField(),
+        {},
+        {2.0, 2.0},
+        1.0
+    );
+    const CoverageStatistics& statistics = analysis.statistics;
+
+    requireNear(statistics.coveredArea, 20.0, "Intentional gap covered area");
+    requireNear(statistics.missedArea, 80.0, "Intentional gap missed area");
+    requireNear(statistics.coveragePercent, 20.0, "Intentional gap percentage");
+    requireNear(statistics.overlapArea, 0.0, "Intentional gap overlap");
+}
+
+void testCoverageOverlapAnalysis() {
+    MissionRoute route = coverageRoute({
+        {{0.0, 4.0}, {10.0, 4.0}},
+        {{10.0, 6.0}, {0.0, 6.0}}
+    });
+    CoverageAnalysis analysis = analyzeCoverage(
+        {route},
+        coverageTestField(),
+        {},
+        {4.0, 2.0},
+        1.0
+    );
+    const CoverageStatistics& statistics = analysis.statistics;
+
+    requireNear(statistics.coveredArea, 60.0, "Overlap unique covered area");
+    requireNear(statistics.overlapArea, 20.0, "Multiply covered area");
+    requireNear(
+        statistics.redundantCoverageArea,
+        20.0,
+        "Redundant camera exposure"
+    );
+    requireNear(statistics.totalCameraExposureArea, 80.0, "Total exposure area");
+    requireNear(statistics.coveragePercent, 60.0, "Overlap coverage percentage");
+    requireNear(statistics.overlapPercent, 20.0, "Overlap percentage");
+    requireNear(
+        statistics.coverageEfficiencyPercent,
+        75.0,
+        "Unique-to-total exposure efficiency"
+    );
+}
+
+void testIrregularCoverageAnalysis() {
+    Polygon triangle{{
+        {0.0, 0.0},
+        {10.0, 0.0},
+        {0.0, 10.0}
+    }};
+    CoverageAnalysis analysis = analyzeCoverage(
+        {coverageRoute({{{-1.0, 5.0}, {11.0, 5.0}}})},
+        triangle,
+        {},
+        {20.0, 4.0},
+        0.25
+    );
+
+    requireNear(
+        analysis.statistics.totalFieldArea,
+        50.0,
+        "Irregular field exact shoelace area"
+    );
+    requireNear(
+        analysis.statistics.coveragePercent,
+        100.0,
+        "Irregular field full coverage"
+    );
+    requireNear(
+        analysis.statistics.missedArea,
+        0.0,
+        "Irregular field missed area"
+    );
+}
+
+void testObstacleCoverageAnalysis() {
+    Polygon obstacle{{
+        {4.0, 0.0},
+        {6.0, 0.0},
+        {6.0, 10.0},
+        {4.0, 10.0}
+    }};
+    MissionRoute route = coverageRoute({
+        {{0.0, 5.0}, {4.0, 5.0}},
+        {{6.0, 5.0}, {10.0, 5.0}}
+    });
+    CoverageAnalysis analysis = analyzeCoverage(
+        {route},
+        coverageTestField(),
+        {obstacle},
+        {10.0, 2.0},
+        1.0
+    );
+    const CoverageStatistics& statistics = analysis.statistics;
+
+    requireNear(statistics.excludedArea, 20.0, "Obstacle excluded area");
+    requireNear(statistics.requiredArea, 80.0, "Obstacle-adjusted required area");
+    requireNear(statistics.coveredArea, 80.0, "Obstacle-adjusted covered area");
+    requireNear(
+        statistics.coveragePercent,
+        100.0,
+        "Obstacle area must not count as missed"
+    );
+}
+
+void testMultiMissionCoverageAnalysis() {
+    MissionRoute firstMission{
+        {{0.0, 0.0}, {0.0, 2.0}, {10.0, 2.0}, {0.0, 0.0}},
+        {
+            WaypointType::Transit,
+            WaypointType::CoverageStart,
+            WaypointType::CoverageEnd,
+            WaypointType::Transit
+        },
+        1,
+        0
+    };
+    MissionRoute secondMission{
+        {{0.0, 0.0}, {0.0, 8.0}, {10.0, 8.0}, {0.0, 0.0}},
+        {
+            WaypointType::Transit,
+            WaypointType::CoverageStart,
+            WaypointType::CoverageEnd,
+            WaypointType::Transit
+        },
+        1,
+        0
+    };
+    CoverageAnalysis analysis = analyzeCoverage(
+        {firstMission, secondMission},
+        coverageTestField(),
+        {},
+        {2.0, 2.0},
+        1.0
+    );
+    const CoverageStatistics& statistics = analysis.statistics;
+
+    requireNear(statistics.coveredArea, 40.0, "Multi-mission covered area");
+    requireNear(statistics.missedArea, 60.0, "Multi-mission missed area");
+    requireNear(statistics.overlapArea, 0.0, "Multi-mission overlap area");
+    requireNear(
+        statistics.surveyDistance,
+        20.0,
+        "Home transit must not count as survey distance"
+    );
+    require(
+        statistics.surveySegments == 2,
+        "Only survey segments count across battery missions"
+    );
+}
+
 struct TestCase {
     const char* name;
     void (*run)();
@@ -1291,7 +1486,13 @@ const vector<TestCase> TEST_CASES{
     {"route_statistics", testRouteStatistics},
     {"battery_feasible", testFeasibleBatteryMission},
     {"battery_split", testBatteryMissionSplitting},
-    {"battery_infeasible", testInfeasibleBatteryMission}
+    {"battery_infeasible", testInfeasibleBatteryMission},
+    {"coverage_full", testFullCoverageAnalysis},
+    {"coverage_gap", testCoverageGapAnalysis},
+    {"coverage_overlap", testCoverageOverlapAnalysis},
+    {"coverage_irregular", testIrregularCoverageAnalysis},
+    {"coverage_obstacle", testObstacleCoverageAnalysis},
+    {"coverage_multi_mission", testMultiMissionCoverageAnalysis}
 };
 
 } // namespace

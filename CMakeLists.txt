@@ -26,6 +26,7 @@ target_sources(
     drone_core
     PRIVATE
         cpp/src/CameraConfig.cpp
+        cpp/src/CoverageAnalysis.cpp
         cpp/src/CoveragePlanner.cpp
         cpp/src/Geometry.cpp
         cpp/src/MissionModel.cpp
