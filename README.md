@@ -6,9 +6,10 @@ field, avoids buffered obstacles and no-fly zones, selects a flight direction,
 checks battery feasibility, splits long work across batteries, and measures the
 quality of the resulting camera coverage.
 
-The included Matplotlib application displays the field, obstacles, safety
-buffers, optimized route, battery missions, camera footprint, accumulated
-camera trail, missed regions, and overlapping coverage.
+The included desktop launcher generates safe random scenarios, builds and tests
+the project, and opens a Matplotlib application showing the field, obstacles,
+safety buffers, optimized route, battery missions, camera footprint, missed
+regions, and overlapping coverage.
 
 ## Features
 
@@ -20,13 +21,15 @@ camera trail, missed regions, and overlapping coverage.
 - Multiple polygon obstacles and no-fly zones with clearance buffers
 - Full segment-level route safety validation
 - Visibility-graph detours with Dijkstra shortest paths
+- Dynamic-programming pass direction and adjacent-lane ordering
 - Flight-angle comparison from 0° through 90°
 - Route distance, time, pass, turn, and waypoint statistics
 - Battery capacity, reserve, turn, launch, and recovery modeling
 - Safe return-to-home paths and automatic multi-battery mission splitting
 - Covered, missed, overlapping, redundant, and efficient coverage analysis
-- Interactive Python playback with clickable waypoints and a persistent camera
-  trail
+- Interactive launcher with validated random fields and obstacles
+- Live CMake/CTest output with dynamically parsed pass counts
+- Interactive Python playback with clickable waypoints and route progress
 - Automated CTest regression suite
 
 ## Architecture
@@ -38,15 +41,19 @@ The reusable C++ code is built as the drone_core library:
 - CameraConfig: ground footprint and overlap spacing calculations.
 - CoveragePlanner: horizontal scanlines clipped to the field and exclusions.
 - ObstacleRouter: segment validation and shortest collision-free transitions.
-- RouteOptimizer: candidate-angle generation, route construction, scoring, and
-  best-angle selection.
+- RouteOptimizer: candidate-angle generation, globally selected lane
+  directions, final obstacle-aware route scoring, and best-angle selection.
 - MissionModel: battery estimates, safe home transit, and pass-boundary mission
   splitting.
 - CoverageAnalysis: grid-based integration of unique, missed, and repeated
   camera coverage.
-- main.cpp: sample configuration, reporting, and CSV export.
+- SurveyScenario: validated CSV input for launcher-generated fields and
+  obstacles, plus the original built-in example.
+- main.cpp: scenario selection, reporting, and CSV export.
 
-The Python visualizer reads the generated CSV files and remains separate from
+The Python launcher is a demo layer only. It writes scenario CSV files and
+invokes the same C++ executable used from the command line. The Python
+visualizer reads the planner's generated CSV files and remains separate from
 the route-planning logic.
 
 ## Build and run
@@ -55,7 +62,8 @@ Requirements:
 
 - CMake 3.16 or newer
 - A C++17 compiler
-- Python 3 with Matplotlib for visualization
+- Python 3.10 or newer
+- Matplotlib for the launcher preview, controls, and mission visualization
 
 From the project root:
 
@@ -71,12 +79,30 @@ Run all automated tests:
 ctest --test-dir build --output-on-failure
 ~~~
 
-Set up and launch the visualization:
+Set up the Python environment:
 
 ~~~sh
 python3 -m venv .venv
 source .venv/bin/activate
 python3 -m pip install -r python/requirements.txt
+~~~
+
+Launch the interactive demo:
+
+~~~sh
+python3 python/launcher.py
+~~~
+
+The launcher starts with a generated field and obstacle preview. Use
+**Randomize Field** or **Randomize Obstacles**, then click **Build & Test**.
+**Visualize Mission** becomes available only after CMake succeeds and the
+actual CTest summary reports that every test passed. It runs the C++ planner on
+the previewed scenario and opens the full visualization.
+
+To run the original built-in scenario without the launcher:
+
+~~~sh
+./build/drone_survey
 python3 python/visualize_field.py
 ~~~
 
@@ -87,15 +113,33 @@ python3 python/visualize_field.py --hide-footprint
 ~~~
 
 In the visualization, click any waypoint or use Previous, Play/Pause, Next,
-and Reset. The gold trail shows camera observations made during survey flight;
-home transit does not create camera coverage.
+and Reset. Play and Next move the drone through interpolated positions instead
+of jumping between waypoints. Once playback starts, the covered and overlap
+layers reset and are revealed by survey-camera passes as the drone moves;
+transit and detour segments do not add coverage. The oriented drone marker and
+its legend symbol follow the current heading, and the battery gauge decreases
+through each mission using the exported battery estimate.
+
+Coverage passes, normal transitions, obstacle detours, and home-transit edges
+use separate colors and line styles. The console also prints every transition's
+coordinates, classification, and distance for route auditing.
+
+For reproducible scenario generation without opening a window:
+
+~~~sh
+python3 python/launcher.py --generate-only --seed 42
+./build/drone_survey \
+  --field generated_scenario/field.csv \
+  --obstacles generated_scenario/obstacles.csv
+~~~
 
 ## Planning pipeline
 
 1. Calculate the camera footprint and lane spacing.
 2. Rotate the field and obstacle buffers for each candidate angle.
 3. Generate horizontal scanlines and clip them to the usable field.
-4. Order the clipped passes into a lawnmower route.
+4. Group pass fragments by scanline and use dynamic programming to select each
+   lane direction, considering both bottom-to-top and top-to-bottom traversal.
 5. Build collision-free transitions with a visibility graph and Dijkstra.
 6. Score each completed obstacle-aware route by distance and turn penalty.
 7. Rotate the winning route back to the original field coordinates.
@@ -161,8 +205,8 @@ resolution is edited.
 
 Running drone_survey writes:
 
-- waypoints.csv: optimized missions, waypoint roles, battery estimates, and
-  route metadata.
+- waypoints.csv: optimized missions, waypoint roles, incoming segment classes,
+  battery estimates, and route metadata.
 - field_polygon.csv: original field vertices.
 - obstacles.csv: obstacle polygons and calculated safety boundaries.
 - camera_footprint.csv: footprint width and height.
@@ -171,6 +215,8 @@ Running drone_survey writes:
   covered/missed/overlap status.
 
 These generated files and the build directory are ignored by Git.
+The launcher also writes `generated_scenario/field.csv` and
+`generated_scenario/obstacles.csv`; that directory is ignored as runtime data.
 
 ## Tests
 
@@ -178,7 +224,9 @@ The suite covers geometry, camera footprint calculations, polygon clipping,
 concave fields, obstacle intersections, full segment safety, shortest detours,
 angle selection, route statistics, battery feasibility, mission splitting, and
 coverage analysis for full coverage, gaps, overlap, irregular fields,
-obstacles, and multiple missions.
+obstacles, and multiple missions. Targeted routing tests also cover unsafe
+connecting segments, shortest detour selection, pass reversal, global lane
+direction selection, long-transition avoidance, and segment classification.
 
 ## Assumptions and limitations
 
@@ -192,8 +240,17 @@ obstacles, and multiple missions.
   bounding box rather than computing an exact polygon offset.
 - Polygons are expected to be simple and non-self-intersecting. Overlapping
   exclusion polygons are not explicitly unioned.
+- Launcher fields use 5–8 angularly ordered vertices. Random obstacles use
+  conservative, separated safety boxes that remain fully inside the field.
 - The energy model is linear in modeled flight time. Wind, temperature,
   payload changes, battery aging, and detailed climb power are future work.
 - Home is configured as the first sample-field vertex.
+- Pass ordering is optimized within the lawnmower constraint: adjacent
+  scanline lanes may reverse and the vertical traversal may start at either
+  end, but the planner does not solve an unconstrained all-pass traveling
+  salesman problem.
+- Candidate-angle scoring includes completed survey transitions and obstacle
+  detours. Battery-specific outbound and return-home transit is added and
+  validated afterward, so it is not part of the angle score.
 - Mission splitting occurs only between complete coverage passes; an individual
   pass that exceeds the battery budget is reported infeasible.

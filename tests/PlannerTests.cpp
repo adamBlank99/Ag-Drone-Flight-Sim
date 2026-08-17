@@ -126,6 +126,63 @@ void requireWaypointsInside(
     }
 }
 
+double routeDistanceByType(
+    const MissionRoute& route,
+    RouteSegmentType requestedType
+) {
+    double distance = 0.0;
+
+    for (size_t i = 1; i < route.waypoints.size(); ++i) {
+        RouteSegmentType type = classifyRouteSegment(
+            route.waypointTypes[i - 1],
+            route.waypointTypes[i]
+        );
+
+        if (type == requestedType) {
+            distance += hypot(
+                route.waypoints[i].x - route.waypoints[i - 1].x,
+                route.waypoints[i].y - route.waypoints[i - 1].y
+            );
+        }
+    }
+
+    return distance;
+}
+
+double totalTransitionDistance(const MissionRoute& route) {
+    double distance = 0.0;
+
+    for (RouteSegmentType type : {
+        RouteSegmentType::NormalTransition,
+        RouteSegmentType::ObstacleDetour,
+        RouteSegmentType::HomeTransit
+    }) {
+        distance += routeDistanceByType(route, type);
+    }
+
+    return distance;
+}
+
+vector<LineSegment> extractCoveragePasses(const MissionRoute& route) {
+    vector<LineSegment> passes;
+
+    for (size_t i = 1; i < route.waypoints.size(); ++i) {
+        if (
+            classifyRouteSegment(
+                route.waypointTypes[i - 1],
+                route.waypointTypes[i]
+            ) == RouteSegmentType::CoveragePass
+        ) {
+            passes.push_back({
+                route.waypoints[i - 1],
+                route.waypoints[i]
+            });
+        }
+    }
+
+    return passes;
+}
+
 void testCameraFootprint() {
     CameraFootprint lowAltitude =
         calculateFootprint({10.0, 90.0, 60.0, 0.30, 0.70});
@@ -544,6 +601,150 @@ void testShortestObstacleDetour() {
     );
 }
 
+void testRouteSegmentClassification() {
+    require(
+        classifyRouteSegment(
+            WaypointType::CoverageStart,
+            WaypointType::CoverageEnd
+        ) == RouteSegmentType::CoveragePass,
+        "Coverage endpoints must classify as a coverage pass"
+    );
+    require(
+        classifyRouteSegment(
+            WaypointType::CoverageEnd,
+            WaypointType::CoverageStart
+        ) == RouteSegmentType::NormalTransition,
+        "Adjacent passes must classify as a normal transition"
+    );
+    require(
+        classifyRouteSegment(
+            WaypointType::CoverageEnd,
+            WaypointType::Detour
+        ) == RouteSegmentType::ObstacleDetour,
+        "A segment entering a detour must classify as obstacle detour"
+    );
+    require(
+        classifyRouteSegment(
+            WaypointType::Transit,
+            WaypointType::CoverageStart
+        ) == RouteSegmentType::HomeTransit,
+        "A segment from home must classify as home transit"
+    );
+}
+
+void testCoveragePassReversal() {
+    Polygon field{{
+        {0.0, 0.0},
+        {100.0, 0.0},
+        {100.0, 30.0},
+        {0.0, 30.0}
+    }};
+    vector<LineSegment> passes{
+        {{0.0, 5.0}, {100.0, 5.0}},
+        {{0.0, 15.0}, {100.0, 15.0}}
+    };
+    MissionRoute route = buildSafeMissionRoute(field, passes, {});
+    vector<LineSegment> orderedPasses = extractCoveragePasses(route);
+
+    require(orderedPasses.size() == 2, "Reversal test pass count");
+    requireNear(
+        totalTransitionDistance(route),
+        10.0,
+        "The second pass must start on the side where the first pass ends"
+    );
+    requireNear(
+        orderedPasses[0].end.x,
+        orderedPasses[1].start.x,
+        "Consecutive coverage directions must reverse when shorter"
+    );
+}
+
+void testGlobalPassOrdering() {
+    Polygon field{{
+        {0.0, 0.0},
+        {100.0, 0.0},
+        {100.0, 30.0},
+        {0.0, 30.0}
+    }};
+    vector<LineSegment> passes{
+        {{0.0, 5.0}, {90.0, 5.0}},
+        {{0.0, 15.0}, {70.0, 15.0}},
+        {{30.0, 25.0}, {70.0, 25.0}}
+    };
+    MissionRoute route = buildSafeMissionRoute(field, passes, {});
+    RouteStatistics statistics = calculateRouteStatistics(route, 1.0);
+    double locallyGreedyDistance =
+        200.0 +
+        hypot(20.0, 10.0) +
+        hypot(30.0, 10.0);
+
+    requireNear(
+        totalTransitionDistance(route),
+        20.0,
+        "Global lane directions must use two short vertical transitions"
+    );
+    requireNear(statistics.totalDistance, 220.0, "Globally ordered route length");
+    require(
+        statistics.totalDistance + TOLERANCE < locallyGreedyDistance,
+        "Global direction selection must beat a locally greedy route"
+    );
+}
+
+void testLongTransitionAvoidance() {
+    Polygon field{{
+        {0.0, 0.0},
+        {100.0, 0.0},
+        {100.0, 40.0},
+        {0.0, 40.0}
+    }};
+    Polygon exclusion{{
+        {40.0, 5.0},
+        {60.0, 5.0},
+        {60.0, 15.0},
+        {40.0, 15.0}
+    }};
+    vector<LineSegment> passes{
+        {{0.0, 10.0}, {40.0, 10.0}},
+        {{60.0, 10.0}, {100.0, 10.0}},
+        {{0.0, 20.0}, {100.0, 20.0}}
+    };
+    MissionRoute route = buildSafeMissionRoute(field, passes, {exclusion});
+    double longestTransitionEdge = 0.0;
+
+    for (size_t i = 1; i < route.waypoints.size(); ++i) {
+        LineSegment segment{route.waypoints[i - 1], route.waypoints[i]};
+        require(
+            isRouteSegmentSafe(segment, field, {exclusion}),
+            "Every long-transition regression segment must be safe"
+        );
+
+        if (
+            classifyRouteSegment(
+                route.waypointTypes[i - 1],
+                route.waypointTypes[i]
+            ) != RouteSegmentType::CoveragePass
+        ) {
+            longestTransitionEdge = max(
+                longestTransitionEdge,
+                hypot(
+                    segment.end.x - segment.start.x,
+                    segment.end.y - segment.start.y
+                )
+            );
+        }
+    }
+
+    requireNear(
+        totalTransitionDistance(route),
+        40.0,
+        "Split lane must detour locally before entering the adjacent lane"
+    );
+    require(
+        longestTransitionEdge <= 20.0 + TOLERANCE,
+        "Route must not contain the former cross-field transition"
+    );
+}
+
 void testMultipleObstacles() {
     Polygon field = obstacleTestField();
     DroneConfig drone = obstacleTestDrone();
@@ -721,11 +922,6 @@ void testObstacleOptimization() {
     );
     vector<Polygon> exclusions = safetyBoundaries(obstacles);
 
-    require(
-        result.bestRoute.angleDegrees != 0.0,
-        "Obstacle-aware optimization should favor a detour-reducing angle"
-    );
-
     for (const RouteCandidate& candidate : result.candidates) {
         MissionRoute route{
             candidate.waypoints,
@@ -749,6 +945,10 @@ void testObstacleOptimization() {
             recalculated.totalDistance +
                 result.turnPenalty * recalculated.transitionSegments,
             "Obstacle candidate must be scored after detours"
+        );
+        require(
+            result.bestRoute.score <= candidate.score + TOLERANCE,
+            "Obstacle-aware optimization must select the final lowest score"
         );
     }
 
@@ -1468,6 +1668,10 @@ const vector<TestCase> TEST_CASES{
     {"obstacle_intersections", testObstacleIntersections},
     {"full_route_segment_safety", testFullRouteSegmentSafety},
     {"shortest_obstacle_detour", testShortestObstacleDetour},
+    {"route_segment_classification", testRouteSegmentClassification},
+    {"coverage_pass_reversal", testCoveragePassReversal},
+    {"global_pass_ordering", testGlobalPassOrdering},
+    {"long_transition_avoidance", testLongTransitionAvoidance},
     {"multiple_obstacles", testMultipleObstacles},
     {"obstacle_near_edge", testObstacleNearEdge},
     {"narrow_gap", testNarrowGap},

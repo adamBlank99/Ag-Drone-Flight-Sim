@@ -12,6 +12,13 @@ enum class WaypointType {
     Transit
 };
 
+enum class RouteSegmentType {
+    CoveragePass,
+    NormalTransition,
+    ObstacleDetour,
+    HomeTransit
+};
+
 struct MissionRoute {
     std::vector<Point> waypoints;
     std::vector<WaypointType> waypointTypes;
@@ -20,3 +27,8 @@ struct MissionRoute {
 };
 
 const char* waypointTypeName(WaypointType type);
+RouteSegmentType classifyRouteSegment(
+    WaypointType startType,
+    WaypointType endType
+);
+const char* routeSegmentTypeName(RouteSegmentType type);

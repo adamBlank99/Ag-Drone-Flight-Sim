@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cmath>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -11,13 +12,15 @@
 #include "MissionModel.h"
 #include "MissionRoute.h"
 #include "Obstacle.h"
+#include "ObstacleRouter.h"
 #include "Polygon.h"
 #include "RouteOptimizer.h"
 #include "RouteStatistics.h"
+#include "SurveyScenario.h"
 
 using namespace std;
 
-int main() {
+int main(int argc, char* argv[]) {
     DroneConfig drone{
         {
             10.0,
@@ -36,55 +39,33 @@ int main() {
         }
     };
 
-    Polygon irregularField{{
-        {0.0, 0.0},
-        {100.0, 0.0},
-        {120.0, 30.0},
-        {90.0, 70.0},
-        {40.0, 80.0},
-        {0.0, 50.0}
-    }};
+    SurveyScenario scenario;
 
-    vector<Obstacle> obstacles{
-        {
-            "barn_1",
-            ObstacleType::Barn,
-            {{{45.0, 25.0}, {65.0, 25.0}, {65.0, 40.0}, {45.0, 40.0}}},
-            2.0
-        },
-        {
-            "pond_1",
-            ObstacleType::Pond,
-            {{
-                {74.0, 48.0},
-                {84.0, 46.0},
-                {90.0, 52.0},
-                {87.0, 59.0},
-                {77.0, 60.0},
-                {71.0, 54.0}
-            }},
-            2.0
-        },
-        {
-            "restricted_1",
-            ObstacleType::Restricted,
-            {{{20.0, 52.0}, {32.0, 52.0}, {32.0, 62.0}, {20.0, 62.0}}},
-            1.0
-        },
-        {
-            "tree_cluster_1",
-            ObstacleType::Trees,
-            {{
-                {12.0, 18.0},
-                {20.0, 16.0},
-                {27.0, 21.0},
-                {25.0, 30.0},
-                {17.0, 33.0},
-                {10.0, 27.0}
-            }},
-            1.5
+    if (argc == 1) {
+        scenario = createDefaultSurveyScenario();
+    }
+    else if (
+        argc == 5 &&
+        string(argv[1]) == "--field" &&
+        string(argv[3]) == "--obstacles"
+    ) {
+        try {
+            scenario = loadSurveyScenario(argv[2], argv[4]);
         }
-    };
+        catch (const exception& error) {
+            cerr << "Invalid survey scenario: " << error.what() << "\n";
+            return 1;
+        }
+    }
+    else {
+        cerr
+            << "Usage: " << argv[0]
+            << " [--field field.csv --obstacles obstacles.csv]\n";
+        return 1;
+    }
+
+    const Polygon& irregularField = scenario.field;
+    const vector<Obstacle>& obstacles = scenario.obstacles;
 
     vector<double> candidateAngles = generateCandidateAngles();
     RouteOptimizationResult optimization = optimizeRoute(
@@ -171,7 +152,7 @@ int main() {
         << "first_coverage_pass,coverage_passes,"
         << "mission_distance,mission_duration_seconds,energy_used_wh,"
         << "battery_used_percent,battery_remaining_percent,"
-        << "waypoint_type,x,y\n";
+        << "waypoint_type,incoming_segment_type,x,y\n";
     polygonFile << "x,y\n";
     footprintFile << "width,height\n";
     obstacleFile
@@ -239,7 +220,21 @@ int main() {
                          << mission.battery.energyUsedWh << ","
                          << mission.battery.batteryUsedPercent << ","
                          << mission.battery.batteryRemainingPercent << ","
-                         << waypointTypeName(mission.waypointTypes[i]) << ","
+                         << waypointTypeName(mission.waypointTypes[i]) << ",";
+
+            if (i == 0) {
+                waypointFile << "start,";
+            }
+            else {
+                waypointFile
+                    << routeSegmentTypeName(classifyRouteSegment(
+                        mission.waypointTypes[i - 1],
+                        mission.waypointTypes[i]
+                    ))
+                    << ",";
+            }
+
+            waypointFile
                          << mission.waypoints[i].x << ","
                          << mission.waypoints[i].y << "\n";
         }
@@ -343,10 +338,52 @@ int main() {
                 WaypointType::Detour
             )
          << "\n";
+    bool allRouteSegmentsSafe = all_of(
+        flightMissions.begin(),
+        flightMissions.end(),
+        [&](const MissionRoute& mission) {
+            return isMissionRouteSafe(
+                mission,
+                irregularField,
+                safetyBoundaries
+            );
+        }
+    );
+    cout << "All route segments collision-free: "
+         << (allRouteSegmentsSafe ? "yes" : "no") << "\n";
     cout << "Total distance: " << routeStatistics.totalDistance << " m\n";
     cout << fixed << setprecision(1);
     cout << "Estimated flight time: "
          << routeStatistics.estimatedFlightTime << " seconds\n";
+
+    cout << "\nTransition diagnostics:\n";
+
+    for (const BatteryMission& mission : batteryPlan.missions) {
+        for (size_t i = 1; i < mission.waypoints.size(); ++i) {
+            RouteSegmentType segmentType = classifyRouteSegment(
+                mission.waypointTypes[i - 1],
+                mission.waypointTypes[i]
+            );
+
+            if (segmentType == RouteSegmentType::CoveragePass) {
+                continue;
+            }
+
+            const Point& start = mission.waypoints[i - 1];
+            const Point& end = mission.waypoints[i];
+            double distance = hypot(
+                end.x - start.x,
+                end.y - start.y
+            );
+
+            cout << "Mission " << mission.missionNumber
+                 << ", segment " << i << ": "
+                 << "(" << start.x << ", " << start.y << ") -> "
+                 << "(" << end.x << ", " << end.y << "), "
+                 << routeSegmentTypeName(segmentType) << ", "
+                 << distance << " m\n";
+        }
+    }
 
     cout << "\nBattery and mission model:\n";
     cout << "Capacity: " << drone.battery.capacityWh << " Wh\n";

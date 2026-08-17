@@ -12,6 +12,10 @@ set(DRONE_TEST_CASES
     obstacle_intersections
     full_route_segment_safety
     shortest_obstacle_detour
+    route_segment_classification
+    coverage_pass_reversal
+    global_pass_ordering
+    long_transition_avoidance
     multiple_obstacles
     obstacle_near_edge
     narrow_gap

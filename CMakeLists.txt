@@ -35,6 +35,7 @@ target_sources(
         cpp/src/ObstacleRouter.cpp
         cpp/src/RouteOptimizer.cpp
         cpp/src/RouteStatistics.cpp
+        cpp/src/SurveyScenario.cpp
 )
 
 target_include_directories(

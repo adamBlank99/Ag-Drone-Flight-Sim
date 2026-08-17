@@ -8,6 +8,7 @@
 /coverage_grid.csv
 /coverage_statistics.csv
 /obstacles.csv
+/generated_scenario/
 
 # Compiled artifacts
 *.dSYM/

@@ -1,6 +1,7 @@
 #include "ObstacleRouter.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <functional>
 #include <limits>
@@ -67,6 +68,281 @@ void appendUniquePoint(vector<Point>& points, const Point& candidate) {
     }
 
     points.push_back(candidate);
+}
+
+double pathDistance(const vector<Point>& path) {
+    double distance = 0.0;
+
+    for (size_t i = 1; i < path.size(); ++i) {
+        distance += pointDistance(path[i - 1], path[i]);
+    }
+
+    return distance;
+}
+
+double shortestTransitionDistance(
+    const Point& start,
+    const Point& end,
+    const Polygon& field,
+    const vector<Polygon>& exclusionZones
+) {
+    return pathDistance(
+        findShortestSafePath(start, end, field, exclusionZones)
+    );
+}
+
+struct LaneOption {
+    vector<LineSegment> passes;
+    Point start;
+    Point end;
+    double internalTransitionDistance;
+};
+
+struct OrderedCoveragePlan {
+    vector<LineSegment> passes;
+    double transitionDistance;
+};
+
+vector<vector<LineSegment>> groupCoverageLanes(
+    const vector<LineSegment>& coverageSegments
+) {
+    vector<LineSegment> sortedSegments = coverageSegments;
+
+    sort(
+        sortedSegments.begin(),
+        sortedSegments.end(),
+        [](const LineSegment& first, const LineSegment& second) {
+            double firstY = (first.start.y + first.end.y) / 2.0;
+            double secondY = (second.start.y + second.end.y) / 2.0;
+
+            if (abs(firstY - secondY) > EPSILON) {
+                return firstY < secondY;
+            }
+
+            return min(first.start.x, first.end.x) <
+                min(second.start.x, second.end.x);
+        }
+    );
+
+    vector<vector<LineSegment>> lanes;
+
+    for (const LineSegment& segment : sortedSegments) {
+        double segmentY = (segment.start.y + segment.end.y) / 2.0;
+
+        if (lanes.empty()) {
+            lanes.push_back({segment});
+            continue;
+        }
+
+        const LineSegment& previousLaneSegment = lanes.back().front();
+        double previousY =
+            (previousLaneSegment.start.y + previousLaneSegment.end.y) / 2.0;
+
+        if (abs(segmentY - previousY) > EPSILON) {
+            lanes.push_back({segment});
+        }
+        else {
+            lanes.back().push_back(segment);
+        }
+    }
+
+    return lanes;
+}
+
+LineSegment orientLeftToRight(const LineSegment& segment) {
+    if (
+        segment.start.x < segment.end.x ||
+        (
+            abs(segment.start.x - segment.end.x) <= EPSILON &&
+            segment.start.y <= segment.end.y
+        )
+    ) {
+        return segment;
+    }
+
+    return {segment.end, segment.start};
+}
+
+LaneOption buildLaneOption(
+    const vector<LineSegment>& lane,
+    bool leftToRight,
+    const Polygon& field,
+    const vector<Polygon>& exclusionZones
+) {
+    vector<LineSegment> passes;
+    passes.reserve(lane.size());
+
+    if (leftToRight) {
+        for (const LineSegment& segment : lane) {
+            passes.push_back(orientLeftToRight(segment));
+        }
+    }
+    else {
+        for (auto iterator = lane.rbegin(); iterator != lane.rend(); ++iterator) {
+            LineSegment oriented = orientLeftToRight(*iterator);
+            passes.push_back({oriented.end, oriented.start});
+        }
+    }
+
+    double internalTransitionDistance = 0.0;
+
+    for (size_t i = 1; i < passes.size(); ++i) {
+        internalTransitionDistance += shortestTransitionDistance(
+            passes[i - 1].end,
+            passes[i].start,
+            field,
+            exclusionZones
+        );
+    }
+
+    return {
+        passes,
+        passes.front().start,
+        passes.back().end,
+        internalTransitionDistance
+    };
+}
+
+OrderedCoveragePlan optimizeLaneOrder(
+    const vector<array<LaneOption, 2>>& laneOptions,
+    const vector<size_t>& laneOrder,
+    const Polygon& field,
+    const vector<Polygon>& exclusionZones
+) {
+    struct State {
+        double distance;
+        size_t previousDirection;
+    };
+
+    const double infinity = numeric_limits<double>::infinity();
+    vector<array<State, 2>> states(laneOrder.size());
+
+    for (size_t direction = 0; direction < 2; ++direction) {
+        const LaneOption& option = laneOptions[laneOrder.front()][direction];
+        states[0][direction] = {
+            option.internalTransitionDistance,
+            2
+        };
+    }
+
+    for (size_t lanePosition = 1;
+         lanePosition < laneOrder.size();
+         ++lanePosition) {
+        for (size_t direction = 0; direction < 2; ++direction) {
+            states[lanePosition][direction] = {infinity, 2};
+            const LaneOption& current =
+                laneOptions[laneOrder[lanePosition]][direction];
+
+            for (size_t previousDirection = 0;
+                 previousDirection < 2;
+                 ++previousDirection) {
+                const LaneOption& previous =
+                    laneOptions[
+                        laneOrder[lanePosition - 1]
+                    ][previousDirection];
+                double candidate =
+                    states[lanePosition - 1][previousDirection].distance +
+                    shortestTransitionDistance(
+                        previous.end,
+                        current.start,
+                        field,
+                        exclusionZones
+                    ) +
+                    current.internalTransitionDistance;
+
+                if (candidate + EPSILON < states[lanePosition][direction].distance) {
+                    states[lanePosition][direction] = {
+                        candidate,
+                        previousDirection
+                    };
+                }
+            }
+        }
+    }
+
+    size_t finalPosition = laneOrder.size() - 1;
+    size_t direction =
+        states[finalPosition][0].distance <=
+            states[finalPosition][1].distance
+        ? 0
+        : 1;
+    vector<size_t> selectedDirections(laneOrder.size());
+
+    for (size_t lanePosition = laneOrder.size(); lanePosition-- > 0;) {
+        selectedDirections[lanePosition] = direction;
+
+        if (lanePosition > 0) {
+            direction = states[lanePosition][direction].previousDirection;
+        }
+    }
+
+    vector<LineSegment> orderedPasses;
+
+    for (size_t lanePosition = 0;
+         lanePosition < laneOrder.size();
+         ++lanePosition) {
+        const LaneOption& option = laneOptions[
+            laneOrder[lanePosition]
+        ][selectedDirections[lanePosition]];
+        orderedPasses.insert(
+            orderedPasses.end(),
+            option.passes.begin(),
+            option.passes.end()
+        );
+    }
+
+    double bestDistance = min(
+        states[finalPosition][0].distance,
+        states[finalPosition][1].distance
+    );
+    return {orderedPasses, bestDistance};
+}
+
+vector<LineSegment> orderCoverageSegments(
+    const vector<LineSegment>& coverageSegments,
+    const Polygon& field,
+    const vector<Polygon>& exclusionZones
+) {
+    if (coverageSegments.empty()) {
+        return {};
+    }
+
+    vector<vector<LineSegment>> lanes = groupCoverageLanes(coverageSegments);
+    vector<array<LaneOption, 2>> laneOptions;
+    laneOptions.reserve(lanes.size());
+
+    for (const vector<LineSegment>& lane : lanes) {
+        laneOptions.push_back({
+            buildLaneOption(lane, true, field, exclusionZones),
+            buildLaneOption(lane, false, field, exclusionZones)
+        });
+    }
+
+    vector<size_t> ascendingOrder(lanes.size());
+
+    for (size_t i = 0; i < ascendingOrder.size(); ++i) {
+        ascendingOrder[i] = i;
+    }
+
+    vector<size_t> descendingOrder = ascendingOrder;
+    reverse(descendingOrder.begin(), descendingOrder.end());
+    OrderedCoveragePlan ascending = optimizeLaneOrder(
+        laneOptions,
+        ascendingOrder,
+        field,
+        exclusionZones
+    );
+    OrderedCoveragePlan descending = optimizeLaneOrder(
+        laneOptions,
+        descendingOrder,
+        field,
+        exclusionZones
+    );
+
+    return
+        ascending.transitionDistance <= descending.transitionDistance
+        ? ascending.passes
+        : descending.passes;
 }
 
 vector<vector<pair<size_t, double>>> buildVisibilityGraph(
@@ -240,14 +516,9 @@ MissionRoute buildSafeMissionRoute(
     validateRoutingPolygons(field, exclusionZones);
     MissionRoute route{{}, {}, coverageSegments.size(), 0};
 
-    for (size_t i = 0; i < coverageSegments.size(); ++i) {
-        Point passStart =
-            i % 2 == 0 ? coverageSegments[i].start : coverageSegments[i].end;
-        Point passEnd =
-            i % 2 == 0 ? coverageSegments[i].end : coverageSegments[i].start;
-
+    for (const LineSegment& segment : coverageSegments) {
         if (!isRouteSegmentSafe(
-            {passStart, passEnd},
+            segment,
             field,
             exclusionZones
         )) {
@@ -255,6 +526,17 @@ MissionRoute buildSafeMissionRoute(
                 "Coverage segment crosses a field boundary or exclusion zone"
             );
         }
+    }
+
+    vector<LineSegment> orderedSegments = orderCoverageSegments(
+        coverageSegments,
+        field,
+        exclusionZones
+    );
+
+    for (const LineSegment& pass : orderedSegments) {
+        Point passStart = pass.start;
+        Point passEnd = pass.end;
 
         if (!route.waypoints.empty()) {
             vector<Point> transition = findShortestSafePath(

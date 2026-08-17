@@ -6,8 +6,9 @@ import math
 from pathlib import Path
 
 import matplotlib.pyplot as plt
-from matplotlib.collections import PolyCollection
+from matplotlib.collections import LineCollection, PolyCollection
 from matplotlib.patches import Polygon, Rectangle
+from matplotlib.path import Path as MarkerPath
 from matplotlib.transforms import Affine2D
 from matplotlib.widgets import Button
 
@@ -189,28 +190,28 @@ axes.add_patch(field)
 coverage_styles = {
     "covered": ("cornflowerblue", 0.42, "Covered once"),
     "missed": ("crimson", 0.85, "Missed"),
-    "overlap": ("mediumpurple", 0.62, "Covered multiple times"),
+    "overlap": ("royalblue", 0.52, "Covered multiple times"),
 }
+coverage_layers = {}
+coverage_cell_polygons = []
+
+for cell in coverage_cells:
+    half_size = cell["size"] / 2.0
+    coverage_cell_polygons.append(
+        [
+            (cell["x"] - half_size, cell["y"] - half_size),
+            (cell["x"] + half_size, cell["y"] - half_size),
+            (cell["x"] + half_size, cell["y"] + half_size),
+            (cell["x"] - half_size, cell["y"] + half_size),
+        ]
+    )
 
 for status, (color, alpha, label) in coverage_styles.items():
-    cell_polygons = []
-
-    for cell in coverage_cells:
-        if cell["status"] != status:
-            continue
-
-        half_size = cell["size"] / 2.0
-        cell_polygons.append(
-            [
-                (cell["x"] - half_size, cell["y"] - half_size),
-                (cell["x"] + half_size, cell["y"] - half_size),
-                (cell["x"] + half_size, cell["y"] + half_size),
-                (cell["x"] - half_size, cell["y"] + half_size),
-            ]
-        )
-
-    if not cell_polygons:
-        continue
+    cell_polygons = [
+        coverage_cell_polygons[index]
+        for index, cell in enumerate(coverage_cells)
+        if cell["status"] == status
+    ]
 
     quality_layer = PolyCollection(
         cell_polygons,
@@ -222,6 +223,26 @@ for status, (color, alpha, label) in coverage_styles.items():
     )
     quality_layer.set_clip_path(field)
     axes.add_collection(quality_layer)
+    coverage_layers[status] = quality_layer
+
+dynamic_covered_layer = PolyCollection(
+    [],
+    facecolors=coverage_styles["covered"][0],
+    edgecolors="none",
+    alpha=coverage_styles["covered"][1],
+    zorder=2,
+)
+dynamic_overlap_layer = PolyCollection(
+    [],
+    facecolors=coverage_styles["overlap"][0],
+    edgecolors="none",
+    alpha=coverage_styles["overlap"][1],
+    zorder=3,
+)
+dynamic_covered_layer.set_clip_path(field)
+dynamic_overlap_layer.set_clip_path(field)
+axes.add_collection(dynamic_covered_layer)
+axes.add_collection(dynamic_overlap_layer)
 
 obstacle_colors = {
     "barn": "saddlebrown",
@@ -298,19 +319,240 @@ axes.text(
 x_values = [point[0] for point in waypoints]
 y_values = [point[1] for point in waypoints]
 
+
+def classify_route_segment(start_type, end_type):
+    if start_type == "coverage_start" and end_type == "coverage_end":
+        return "coverage_pass"
+    if start_type == "transit" or end_type == "transit":
+        return "home_transit"
+    if start_type == "detour" or end_type == "detour":
+        return "obstacle_detour"
+    return "normal_transition"
+
+
+route_segment_styles = {
+    "coverage_pass": {
+        "color": "#1756d1",
+        "linestyle": "solid",
+        "linewidth": 2.8,
+        "label": "Coverage pass",
+    },
+    "normal_transition": {
+        "color": "#f39c12",
+        "linestyle": "dashed",
+        "linewidth": 2.4,
+        "label": "Normal transition",
+    },
+    "obstacle_detour": {
+        "color": "#d62728",
+        "linestyle": "dotted",
+        "linewidth": 3.0,
+        "label": "Obstacle detour",
+    },
+    "home_transit": {
+        "color": "#7b3294",
+        "linestyle": "dashdot",
+        "linewidth": 2.4,
+        "label": "Home transit",
+    },
+}
+route_segments_by_type = {
+    segment_type: []
+    for segment_type in route_segment_styles
+}
+
+for index in range(1, len(waypoints)):
+    if mission_ids[index - 1] != mission_ids[index]:
+        continue
+
+    segment_type = classify_route_segment(
+        waypoint_types[index - 1],
+        waypoint_types[index],
+    )
+    route_segments_by_type[segment_type].append(
+        [waypoints[index - 1], waypoints[index]]
+    )
+
+for segment_type, segments in route_segments_by_type.items():
+    if not segments:
+        continue
+
+    style = route_segment_styles[segment_type]
+    axes.add_collection(
+        LineCollection(
+            segments,
+            colors=style["color"],
+            linestyles=style["linestyle"],
+            linewidths=style["linewidth"],
+            label=style["label"],
+            zorder=10,
+        )
+    )
+
+ANIMATION_STEP_METERS = 2.5
+
+
+def heading_between(start, end, fallback):
+    delta_x = end[0] - start[0]
+    delta_y = end[1] - start[1]
+
+    if delta_x == 0.0 and delta_y == 0.0:
+        return fallback
+
+    return math.degrees(math.atan2(delta_y, delta_x))
+
+
+def drone_marker_path(heading):
+    """Return an arrow-shaped marker pointing along a route heading."""
+    angle = math.radians(heading)
+    cosine = math.cos(angle)
+    sine = math.sin(angle)
+    base_vertices = [
+        (1.0, 0.0),
+        (-0.65, 0.68),
+        (-0.30, 0.0),
+        (-0.65, -0.68),
+        (1.0, 0.0),
+    ]
+    rotated_vertices = [
+        (
+            x * cosine - y * sine,
+            x * sine + y * cosine,
+        )
+        for x, y in base_vertices
+    ]
+    return MarkerPath(
+        rotated_vertices,
+        [
+            MarkerPath.MOVETO,
+            MarkerPath.LINETO,
+            MarkerPath.LINETO,
+            MarkerPath.LINETO,
+            MarkerPath.CLOSEPOLY,
+        ],
+    )
+
+
+mission_route_distances = {
+    mission_id: 0.0
+    for mission_id in set(mission_ids)
+}
+mission_battery_totals = {}
+
+for index, mission_id in enumerate(mission_ids):
+    mission_battery_totals.setdefault(mission_id, battery_used[index])
+
+    if index == 0 or mission_ids[index - 1] != mission_id:
+        continue
+
+    mission_route_distances[mission_id] += math.dist(
+        waypoints[index - 1],
+        waypoints[index],
+    )
+
+initial_heading = (
+    heading_between(waypoints[0], waypoints[1], route_metadata["angle"])
+    if len(waypoints) > 1
+    else route_metadata["angle"]
+)
+route_frames = [
+    {
+        "x": waypoints[0][0],
+        "y": waypoints[0][1],
+        "heading": initial_heading,
+        "mission_id": mission_ids[0],
+        "mission_distance": 0.0,
+        "segment_index": 0,
+        "segment_fraction": 0.0,
+        "survey_segment": None,
+    }
+]
+waypoint_frame_indices = [0] * len(waypoints)
+mission_distance = 0.0
+
+for segment_index in range(len(waypoints) - 1):
+    start = waypoints[segment_index]
+    end = waypoints[segment_index + 1]
+    start_mission = mission_ids[segment_index]
+    end_mission = mission_ids[segment_index + 1]
+    heading = heading_between(start, end, route_metadata["angle"])
+
+    if start_mission != end_mission:
+        mission_distance = 0.0
+        route_frames.append(
+            {
+                "x": end[0],
+                "y": end[1],
+                "heading": (
+                    heading_between(
+                        end,
+                        waypoints[segment_index + 2],
+                        route_metadata["angle"],
+                    )
+                    if segment_index + 2 < len(waypoints)
+                    else route_metadata["angle"]
+                ),
+                "mission_id": end_mission,
+                "mission_distance": 0.0,
+                "segment_index": segment_index + 1,
+                "segment_fraction": 0.0,
+                "survey_segment": None,
+            }
+        )
+        waypoint_frame_indices[segment_index + 1] = len(route_frames) - 1
+        continue
+
+    segment_length = math.dist(start, end)
+    survey_segment = (
+        segment_index
+        if waypoint_types[segment_index] == "coverage_start"
+        and waypoint_types[segment_index + 1] == "coverage_end"
+        else None
+    )
+
+    if survey_segment is not None:
+        route_frames.append(
+            {
+                "x": start[0],
+                "y": start[1],
+                "heading": heading,
+                "mission_id": start_mission,
+                "mission_distance": mission_distance,
+                "segment_index": segment_index,
+                "segment_fraction": 0.0,
+                "survey_segment": survey_segment,
+            }
+        )
+
+    step_count = max(1, math.ceil(segment_length / ANIMATION_STEP_METERS))
+
+    for step in range(1, step_count + 1):
+        fraction = step / step_count
+        route_frames.append(
+            {
+                "x": start[0] + (end[0] - start[0]) * fraction,
+                "y": start[1] + (end[1] - start[1]) * fraction,
+                "heading": heading,
+                "mission_id": start_mission,
+                "mission_distance": mission_distance + segment_length * fraction,
+                "segment_index": segment_index,
+                "segment_fraction": fraction,
+                "survey_segment": survey_segment,
+            }
+        )
+
+    mission_distance += segment_length
+    waypoint_frame_indices[segment_index + 1] = len(route_frames) - 1
+
 route_line, = axes.plot(
     x_values,
     y_values,
-    color="blue" if route_metadata["mission_count"] == 1 else "lightgray",
+    color="#1756d1",
     marker="o",
-    linewidth=2 if route_metadata["mission_count"] == 1 else 1,
-    label=(
-        f"Optimized route ({route_metadata['angle']:g}°)"
-        if route_metadata["mission_count"] == 1
-        else "All mission waypoints"
-    ),
+    linestyle="None",
+    label="Route waypoints",
     picker=7,
-    zorder=10,
+    zorder=11,
 )
 
 if route_metadata["mission_count"] > 1:
@@ -331,7 +573,8 @@ if route_metadata["mission_count"] > 1:
             [x_values[index] for index in indices],
             [y_values[index] for index in indices],
             color=color,
-            linewidth=2.5,
+            linewidth=1.3,
+            alpha=0.25,
             label=(
                 f"Mission {mission_id}: "
                 f"{battery_used[indices[0]]:.1f}% battery"
@@ -377,17 +620,6 @@ if transit_points:
 footprint_width, footprint_height = read_points(FOOTPRINT_FILE)[0]
 first_x, first_y = waypoints[0]
 
-coverage_trail = PolyCollection(
-    [],
-    facecolors="gold",
-    edgecolors="goldenrod",
-    linewidths=0.4,
-    alpha=0.22,
-    label="Camera coverage trail",
-    zorder=3,
-)
-axes.add_collection(coverage_trail)
-
 camera_footprint = Rectangle(
     (
         first_x - footprint_height / 2.0,
@@ -409,8 +641,8 @@ drone_marker, = axes.plot(
     [first_x],
     [first_y],
     color="black",
-    marker="^",
-    markersize=11,
+    marker=drone_marker_path(initial_heading),
+    markersize=13,
     linestyle="None",
     label="Drone",
     zorder=15,
@@ -419,8 +651,9 @@ drone_marker, = axes.plot(
 completed_route, = axes.plot(
     [first_x],
     [first_y],
-    color="orange",
-    linewidth=3,
+    color="#202020",
+    linewidth=4,
+    alpha=0.45,
     zorder=13,
 )
 
@@ -436,129 +669,179 @@ selected_waypoint, = axes.plot(
     zorder=16,
 )
 
-current_waypoint = 0
-furthest_waypoint = 0
+battery_axes = figure.add_axes([0.55, 0.025, 0.18, 0.035])
+battery_axes.set_xlim(0.0, 100.0)
+battery_axes.set_ylim(0.0, 1.0)
+battery_axes.set_xticks([])
+battery_axes.set_yticks([])
+battery_axes.set_facecolor("#e6e6e6")
+battery_fill = Rectangle(
+    (0.0, 0.0),
+    100.0,
+    1.0,
+    facecolor="forestgreen",
+    edgecolor="none",
+)
+battery_axes.add_patch(battery_fill)
+battery_label = battery_axes.text(
+    50.0,
+    0.5,
+    "Battery: 100%",
+    horizontalalignment="center",
+    verticalalignment="center",
+    fontsize=9,
+    fontweight="bold",
+)
+
+
+current_frame = 0
 is_playing = False
+stop_at_frame = None
+playback_started = False
+drone_legend_handle = None
+dynamic_coverage_segments = [set() for _cell in coverage_cells]
 
 
-def route_heading(waypoint_index):
-    """Return the heading from this waypoint toward the next route point."""
-    if len(waypoints) == 1:
-        return route_metadata["angle"]
+def update_dynamic_coverage_layers():
+    covered_polygons = []
+    overlap_polygons = []
 
-    neighbor_index = (
-        waypoint_index + 1
-        if waypoint_index < len(waypoints) - 1
-        else waypoint_index - 1
-    )
-    x, y = waypoints[waypoint_index]
-    neighbor_x, neighbor_y = waypoints[neighbor_index]
+    for index, observed_segments in enumerate(dynamic_coverage_segments):
+        if len(observed_segments) == 1:
+            covered_polygons.append(coverage_cell_polygons[index])
+        elif len(observed_segments) >= 2:
+            overlap_polygons.append(coverage_cell_polygons[index])
 
-    if waypoint_index == len(waypoints) - 1:
-        delta_x = x - neighbor_x
-        delta_y = y - neighbor_y
-    else:
-        delta_x = neighbor_x - x
-        delta_y = neighbor_y - y
-
-    if delta_x == 0.0 and delta_y == 0.0:
-        return route_metadata["angle"]
-
-    return math.degrees(math.atan2(delta_y, delta_x))
+    dynamic_covered_layer.set_verts(covered_polygons)
+    dynamic_overlap_layer.set_verts(overlap_polygons)
 
 
-def coverage_rectangle(center, forward_length, cross_width, heading):
-    """Build the corners of one rotated camera-coverage rectangle."""
-    angle = math.radians(heading)
-    forward_x = math.cos(angle)
-    forward_y = math.sin(angle)
-    cross_x = -forward_y
-    cross_y = forward_x
-    half_forward = forward_length / 2.0
-    half_cross = cross_width / 2.0
-    center_x, center_y = center
+def clear_dynamic_coverage():
+    for observed_segments in dynamic_coverage_segments:
+        observed_segments.clear()
 
-    return [
-        (
-            center_x - forward_x * half_forward - cross_x * half_cross,
-            center_y - forward_y * half_forward - cross_y * half_cross,
-        ),
-        (
-            center_x + forward_x * half_forward - cross_x * half_cross,
-            center_y + forward_y * half_forward - cross_y * half_cross,
-        ),
-        (
-            center_x + forward_x * half_forward + cross_x * half_cross,
-            center_y + forward_y * half_forward + cross_y * half_cross,
-        ),
-        (
-            center_x - forward_x * half_forward + cross_x * half_cross,
-            center_y - forward_y * half_forward + cross_y * half_cross,
-        ),
-    ]
+    update_dynamic_coverage_layers()
 
 
-def build_coverage_trail(last_waypoint):
-    """Create camera footprints and swept swaths through the flown route."""
-    coverage_polygons = []
+def observe_survey_coverage(frame):
+    """Reveal the portion of one camera swath reached by this route frame."""
+    survey_segment = frame["survey_segment"]
 
-    for index in range(last_waypoint + 1):
-        if waypoint_types[index] == "transit":
-            continue
+    if survey_segment is None:
+        return
 
-        coverage_polygons.append(
-            coverage_rectangle(
-                waypoints[index],
-                footprint_height,
-                footprint_width,
-                route_heading(index),
-            )
-        )
+    start = waypoints[survey_segment]
+    end = waypoints[survey_segment + 1]
+    direction_x = end[0] - start[0]
+    direction_y = end[1] - start[1]
+    segment_length = math.hypot(direction_x, direction_y)
 
-    for index in range(1, last_waypoint + 1):
+    if segment_length == 0.0:
+        return
+
+    unit_x = direction_x / segment_length
+    unit_y = direction_y / segment_length
+    reached_distance = segment_length * frame["segment_fraction"]
+    half_forward_footprint = footprint_height / 2.0
+    half_side_footprint = footprint_width / 2.0
+
+    for index, cell in enumerate(coverage_cells):
         if (
-            waypoint_types[index - 1] == "transit"
-            or waypoint_types[index] == "transit"
+            cell["count"] == 0
+            or survey_segment in dynamic_coverage_segments[index]
         ):
             continue
 
-        start_x, start_y = waypoints[index - 1]
-        end_x, end_y = waypoints[index]
-        delta_x = end_x - start_x
-        delta_y = end_y - start_y
-        segment_length = math.hypot(delta_x, delta_y)
+        relative_x = cell["x"] - start[0]
+        relative_y = cell["y"] - start[1]
+        along_track = relative_x * unit_x + relative_y * unit_y
+        cross_track = -relative_x * unit_y + relative_y * unit_x
 
-        if segment_length == 0.0:
-            continue
-
-        coverage_polygons.append(
-            coverage_rectangle(
-                ((start_x + end_x) / 2.0, (start_y + end_y) / 2.0),
-                segment_length,
-                footprint_width,
-                math.degrees(math.atan2(delta_y, delta_x)),
-            )
-        )
-
-    return coverage_polygons
+        if (
+            -half_forward_footprint <= along_track
+            <= reached_distance + half_forward_footprint
+            and abs(cross_track) <= half_side_footprint
+        ):
+            dynamic_coverage_segments[index].add(survey_segment)
 
 
-def move_drone(waypoint_index):
-    """Move the drone and its ground footprint to one route waypoint."""
-    global current_waypoint, furthest_waypoint
+def begin_playback():
+    global playback_started
 
-    current_waypoint = max(0, min(waypoint_index, len(waypoints) - 1))
-    furthest_waypoint = max(furthest_waypoint, current_waypoint)
-    x, y = waypoints[current_waypoint]
-    heading = route_heading(current_waypoint)
+    if playback_started:
+        return
 
+    playback_started = True
+    coverage_layers["covered"].set_visible(False)
+    coverage_layers["overlap"].set_visible(False)
+    clear_dynamic_coverage()
+
+
+def battery_remaining_for_frame(frame):
+    mission_id = frame["mission_id"]
+    total_distance = mission_route_distances[mission_id]
+    progress = (
+        min(1.0, frame["mission_distance"] / total_distance)
+        if total_distance > 0.0
+        else 0.0
+    )
+    used = mission_battery_totals[mission_id] * progress
+    return max(0.0, 100.0 - used), used
+
+
+def update_battery_display(frame):
+    remaining, _used = battery_remaining_for_frame(frame)
+    mission_id = frame["mission_id"]
+    battery_fill.set_width(remaining)
+
+    if remaining > 30.0:
+        battery_fill.set_facecolor("forestgreen")
+    elif remaining > 20.0:
+        battery_fill.set_facecolor("darkorange")
+    else:
+        battery_fill.set_facecolor("crimson")
+
+    battery_label.set_text(
+        f"Mission {mission_id} battery: {remaining:.1f}%"
+    )
+
+
+def update_drone_orientation(heading):
+    marker = drone_marker_path(heading)
+    drone_marker.set_marker(marker)
+
+    if drone_legend_handle is not None:
+        drone_legend_handle.set_marker(marker)
+
+
+def move_drone_to_frame(frame_index, rebuild_coverage=False):
+    """Move the drone to a continuous route frame and update mission state."""
+    global current_frame
+
+    current_frame = max(0, min(frame_index, len(route_frames) - 1))
+    frame = route_frames[current_frame]
+
+    if playback_started:
+        if rebuild_coverage:
+            clear_dynamic_coverage()
+
+            for previous_frame in route_frames[: current_frame + 1]:
+                observe_survey_coverage(previous_frame)
+        else:
+            observe_survey_coverage(frame)
+
+        update_dynamic_coverage_layers()
+
+    x = frame["x"]
+    y = frame["y"]
+    heading = frame["heading"]
     drone_marker.set_data([x], [y])
     selected_waypoint.set_data([x], [y])
+    update_drone_orientation(heading)
     completed_route.set_data(
-        x_values[: furthest_waypoint + 1],
-        y_values[: furthest_waypoint + 1],
+        [route_frame["x"] for route_frame in route_frames[: current_frame + 1]],
+        [route_frame["y"] for route_frame in route_frames[: current_frame + 1]],
     )
-    coverage_trail.set_verts(build_coverage_trail(furthest_waypoint))
 
     camera_footprint.set_xy(
         (
@@ -567,24 +850,27 @@ def move_drone(waypoint_index):
         )
     )
     camera_footprint.set_transform(
-        Affine2D().rotate_deg_around(
-            x,
-            y,
-            heading,
-        ) + axes.transData
+        Affine2D().rotate_deg_around(x, y, heading) + axes.transData
     )
     camera_footprint.set_visible(
-        arguments.show_footprint
-        and waypoint_types[current_waypoint] != "transit"
+        arguments.show_footprint and frame["survey_segment"] is not None
     )
+    update_battery_display(frame)
 
+    segment_index = frame["segment_index"]
+    target_waypoint = min(segment_index + 1, len(waypoints) - 1)
+    remaining, used = battery_remaining_for_frame(frame)
+    route_type = (
+        "survey"
+        if frame["survey_segment"] is not None
+        else waypoint_types[target_waypoint].replace("_", " ")
+    )
     waypoint_status.set_text(
-        f"Waypoint {current_waypoint + 1}/{len(waypoints)}  |  "
-        f"Mission {mission_ids[current_waypoint]}/"
-        f"{route_metadata['mission_count']}  |  "
-        f"Type: {waypoint_types[current_waypoint].replace('_', ' ')}  |  "
-        f"Position: ({x:.1f}, {y:.1f}) m  |  Heading: {heading:.0f}°  |  "
-        f"Battery: {battery_used[current_waypoint]:.1f}%"
+        f"Approaching waypoint {target_waypoint + 1}/{len(waypoints)}  |  "
+        f"Mission {frame['mission_id']}/{route_metadata['mission_count']}  |  "
+        f"Type: {route_type}  |  Position: ({x:.1f}, {y:.1f}) m  |  "
+        f"Heading: {heading:.0f}°  |  "
+        f"Battery: {remaining:.1f}% remaining ({used:.1f}% used)"
     )
     figure.canvas.draw_idle()
 
@@ -593,57 +879,96 @@ def select_waypoint(event):
     if event.artist is not route_line or not len(event.ind):
         return
 
-    move_drone(int(event.ind[0]))
+    stop_animation()
+    begin_playback()
+    move_drone_to_frame(
+        waypoint_frame_indices[int(event.ind[0])],
+        rebuild_coverage=True,
+    )
 
 
 def previous_waypoint(_event):
-    move_drone(current_waypoint - 1)
+    stop_animation()
+    begin_playback()
+    earlier_frames = [
+        frame_index
+        for frame_index in waypoint_frame_indices
+        if frame_index < current_frame
+    ]
+    target_frame = max(earlier_frames) if earlier_frames else 0
+    move_drone_to_frame(target_frame, rebuild_coverage=True)
 
 
 def next_waypoint(_event):
-    move_drone(current_waypoint + 1)
+    global is_playing, stop_at_frame
+
+    begin_playback()
+    later_frames = [
+        frame_index
+        for frame_index in waypoint_frame_indices
+        if frame_index > current_frame
+    ]
+
+    if not later_frames:
+        return
+
+    stop_at_frame = min(later_frames)
+    is_playing = True
+    play_button.label.set_text("Pause")
+    animation_timer.start()
 
 
 def advance_animation():
     if not is_playing:
         return
 
-    if current_waypoint >= len(waypoints) - 1:
+    if current_frame >= len(route_frames) - 1:
         stop_animation()
         return
 
-    move_drone(current_waypoint + 1)
+    move_drone_to_frame(current_frame + 1)
 
-    if current_waypoint >= len(waypoints) - 1:
+    if (
+        current_frame >= len(route_frames) - 1
+        or (
+            stop_at_frame is not None
+            and current_frame >= stop_at_frame
+        )
+    ):
         stop_animation()
 
 
 def stop_animation():
-    global is_playing
+    global is_playing, stop_at_frame
 
     is_playing = False
+    stop_at_frame = None
     animation_timer.stop()
     play_button.label.set_text("Play")
 
 
 def reset_flight(_event=None):
-    global furthest_waypoint
-
     stop_animation()
-    furthest_waypoint = 0
-    move_drone(0)
+
+    if playback_started:
+        clear_dynamic_coverage()
+
+    move_drone_to_frame(0, rebuild_coverage=playback_started)
 
 
 def toggle_animation(_event):
-    global is_playing
+    global is_playing, stop_at_frame
 
     if is_playing:
         stop_animation()
         return
 
-    if current_waypoint >= len(waypoints) - 1:
+    begin_playback()
+
+    if current_frame >= len(route_frames) - 1:
         reset_flight()
 
+    stop_at_frame = None
     is_playing = True
     play_button.label.set_text("Pause")
     animation_timer.start()
@@ -666,13 +991,22 @@ play_button.on_clicked(toggle_animation)
 next_button.on_clicked(next_waypoint)
 reset_button.on_clicked(reset_flight)
 
-animation_timer = figure.canvas.new_timer(interval=350)
+animation_timer = figure.canvas.new_timer(interval=60)
 animation_timer.add_callback(advance_animation)
 
 figure.canvas.mpl_connect("pick_event", select_waypoint)
 
-axes.legend(loc="upper left", bbox_to_anchor=(1.02, 1.0))
+route_legend = axes.legend(loc="upper left", bbox_to_anchor=(1.02, 1.0))
+
+for legend_text, legend_handle in zip(
+    route_legend.get_texts(),
+    route_legend.legend_handles,
+):
+    if legend_text.get_text() == "Drone":
+        drone_legend_handle = legend_handle
+        break
+
 figure.subplots_adjust(left=0.08, right=0.78, bottom=0.18, top=0.92)
-move_drone(0)
+move_drone_to_frame(0)
 
 plt.show()
