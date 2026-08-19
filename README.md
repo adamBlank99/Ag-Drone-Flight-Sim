@@ -1,6 +1,6 @@
 # Agricultural Drone Coverage Planner
 
-A **C++17 / Python drone-survey planning system** that generates optimized flight paths for irregular agricultural fields while accounting for camera coverage, obstacles, no-fly zones, battery limits, and image overlap.
+A C++17 / Python drone-survey planning system that generates optimized flight paths for irregular agricultural fields while accounting for camera coverage, obstacles, no-fly zones, battery limits, and image overlap.
 
 The planner evaluates multiple flight directions, generates collision-free survey routes, estimates mission feasibility, and analyzes how effectively the drone photographs the field.
 
