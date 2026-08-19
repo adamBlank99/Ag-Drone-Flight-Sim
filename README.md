@@ -19,6 +19,7 @@ Use the desktop launcher to generate a random irregular field and obstacles, the
 The visualization plays the drone through the optimized route while displaying obstacles, safety buffers, camera coverage, missed regions, overlapping coverage, and battery usage.
 
 
+https://github.com/user-attachments/assets/e217c281-da6d-4bd1-887b-6bcb77f22d72
 
 ---
 
