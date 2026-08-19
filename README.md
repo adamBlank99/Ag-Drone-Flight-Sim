@@ -27,8 +27,8 @@ https://github.com/user-attachments/assets/e217c281-da6d-4bd1-887b-6bcb77f22d72
 
 Given an irregular field boundary, the system:
 
-1. Models the drone camera footprint from **altitude and field of view**
-2. Calculates survey-lane spacing from the required **image overlap**
+1. Models the drone camera footprint from altitude and field of view
+2. Calculates survey-lane spacing from the required image overlap
 3. Generates coverage passes inside the field
 4. Avoids obstacles and no-fly zones using collision-safe routing
 5. Tests multiple flight angles and selects the most efficient route
@@ -64,4 +64,4 @@ Given an irregular field boundary, the system:
 
 ## Technologies
 
-**C++17 · Python · CMake · Matplotlib · Computational Geometry · Dijkstra · Dynamic Programming · Route Optimization**
+C++17 · Python · CMake · Matplotlib · Computational Geometry · Dijkstra · Dynamic Programming · Route Optimization
